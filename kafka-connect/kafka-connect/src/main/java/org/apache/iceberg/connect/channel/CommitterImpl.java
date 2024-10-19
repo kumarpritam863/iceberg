@@ -58,7 +58,7 @@ public class CommitterImpl implements Committer {
 
   @Override
   public void start(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context) {
-    KafkaClientFactory clientFactory = new KafkaClientFactory(config.kafkaProps());
+    KafkaClientFactory clientFactory = new KafkaClientFactory(config.kafkaProps(), config.kafkaAdminProps());
 
     ConsumerGroupDescription groupDesc;
     try (Admin admin = clientFactory.createAdmin()) {

@@ -35,9 +35,11 @@ import org.apache.kafka.common.serialization.StringSerializer;
 
 class KafkaClientFactory {
   private final Map<String, String> kafkaProps;
+  private final Map<String, String> kafkaAdminProps;
 
-  KafkaClientFactory(Map<String, String> kafkaProps) {
+  KafkaClientFactory(Map<String, String> kafkaProps, Map<String, String> kafkaAdminProps) {
     this.kafkaProps = kafkaProps;
+    this.kafkaAdminProps = kafkaAdminProps;
   }
 
   Producer<String, byte[]> createProducer(String transactionalId) {
@@ -62,7 +64,7 @@ class KafkaClientFactory {
   }
 
   Admin createAdmin() {
-    Map<String, Object> adminProps = Maps.newHashMap(kafkaProps);
+    Map<String, Object> adminProps = Maps.newHashMap(kafkaAdminProps);
     return Admin.create(adminProps);
   }
 }
