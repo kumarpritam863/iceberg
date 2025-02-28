@@ -1,31 +1,32 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *  * Licensed to the Apache Software Foundation (ASF) under one
+ *  * or more contributor license agreements.  See the NOTICE file
+ *  * distributed with this work for additional information
+ *  * regarding copyright ownership.  The ASF licenses this file
+ *  * to you under the Apache License, Version 2.0 (the
+ *  * "License"); you may not use this file except in compliance
+ *  * with the License.  You may obtain a copy of the License at
+ *  *
+ *  *   http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  * Unless required by applicable law or agreed to in writing,
+ *  * software distributed under the License is distributed on an
+ *  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  * KIND, either express or implied.  See the License for the
+ *  * specific language governing permissions and limitations
+ *  * under the License.
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
  */
 package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import org.apache.iceberg.catalog.Catalog;
-import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.KafkaCommitter;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
@@ -43,7 +44,7 @@ import org.slf4j.LoggerFactory;
 
 import static java.util.stream.Collectors.toMap;
 
-public class CommitterImpl implements Committer {
+public class CommitterImpl implements KafkaCommitter {
 
   private static final Logger LOG = LoggerFactory.getLogger(CommitterImpl.class);
 
@@ -81,7 +82,6 @@ public class CommitterImpl implements Committer {
     }
   }
 
-  @Override
   public boolean isCoordinator(Collection<TopicPartition> currentAssignedPartitions) {
     ConsumerGroupDescription groupDesc;
     try (Admin admin = clientFactory.createAdmin()) {
@@ -89,8 +89,7 @@ public class CommitterImpl implements Committer {
     }
       if (groupDesc.state() == ConsumerGroupState.STABLE) {
       Collection<MemberDescription> members = groupDesc.members();
-      Set<TopicPartition> partitions = context.assignment();
-      if (isLeader(members, partitions)) {
+      if (isLeader(members, currentAssignedPartitions)) {
         membersWhenWorkerIsCoordinator = members;
         return true;
       }
@@ -148,6 +147,18 @@ public class CommitterImpl implements Committer {
   }
 
   @Override
+  public void start(Collection<TopicPartition> addedPartitions) {
+    if(isCoordinator(addedPartitions))
+      startCoordinator();
+  }
+
+  @Override
+  public void stop(Collection<TopicPartition> closedPartitions) {
+    stopWorker();
+    if (isCoordinator(closedPartitions))
+      stopCoordinator();
+  }
+
   public void startWorker() {
     if(null == this.worker) {
       LOG.info("Starting commit worker");
@@ -157,7 +168,6 @@ public class CommitterImpl implements Committer {
     }
   }
 
-  @Override
   public void startCoordinator() {
     LOG.info("Task elected leader, starting commit coordinator");
     Coordinator coordinator = new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
@@ -165,7 +175,6 @@ public class CommitterImpl implements Committer {
     coordinatorThread.start();
   }
 
-  @Override
   public void stopWorker() {
     if (worker != null) {
       worker.stop();
@@ -173,7 +182,6 @@ public class CommitterImpl implements Committer {
     }
   }
 
-  @Override
   public void stopCoordinator() {
     if (coordinatorThread != null) {
       coordinatorThread.terminate();

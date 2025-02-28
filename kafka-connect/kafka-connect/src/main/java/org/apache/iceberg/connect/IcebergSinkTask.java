@@ -21,7 +21,6 @@ package org.apache.iceberg.connect;
 import java.util.Collection;
 import java.util.Map;
 import org.apache.iceberg.catalog.Catalog;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
@@ -35,7 +34,7 @@ public class IcebergSinkTask extends SinkTask {
 
   private IcebergSinkConfig config;
   private Catalog catalog;
-  private Committer committer;
+  private BaseCommitter committer;
 
   @Override
   public String version() {
@@ -44,58 +43,58 @@ public class IcebergSinkTask extends SinkTask {
 
   @Override
   public void start(Map<String, String> props) {
-    this.config = new IcebergSinkConfig(props);
-    /*
-     catalog and committer are global resource and does not depend on the topic partition,
-     hence we should open this with the start call only and should only close these if the task is closed by connect
-     framework.
-     */
-    catalog = CatalogUtils.loadCatalog(config);
-    committer = CommitterFactory.createCommitter(catalog, config, context);
+    LOG.info("Starting IcebergSinkTask with properties: {}", props);
+    try {
+      this.config = new IcebergSinkConfig(props);
+      this.catalog = CatalogUtils.loadCatalog(config);
+      this.committer = CommitterFactory.createCommitter(catalog, config, context).configure(config.committerConfig());
+    } catch (Exception e) {
+      LOG.error("Error initializing IcebergSinkTask", e);
+      throw new RuntimeException("Failed to start IcebergSinkTask", e);
+    }
   }
 
   @Override
   public void open(Collection<TopicPartition> partitions) {
-    // We should be starting co-ordinator only the list of partitions has the zeroth partition.
-    if(committer.isCoordinator(partitions)) {
-      committer.startCoordinator();
+    LOG.info("Opening IcebergSinkTask for partitions: {}", partitions);
+    if (committer == null) {
+      LOG.warn("Committer is not initialized, skipping partition handling.");
+      return;
     }
-    committer.syncLastCommittedOffsets();
+    try {
+      if (committer instanceof KafkaCommitter) {
+        ((KafkaCommitter) committer).start(partitions);
+        ((KafkaCommitter) committer).syncLastCommittedOffsets();
+      } else {
+        ((Committer) committer).start(catalog, config, context);
+      }
+    } catch (Exception e) {
+      LOG.error("Error opening partitions in IcebergSinkTask", e);
+      throw new RuntimeException("Failed to open partitions", e);
+    }
   }
 
   @Override
   public void close(Collection<TopicPartition> partitions) {
-    // We need to close worker here in every case to ensure exactly once otherwise this will lead to duplicate records.
-    committer.stopWorker();
-    // Coordinator should only be closed if this received closed partitions has the partition which elected this task as coordinator.
-    if(committer.isCoordinator(partitions)) {
-      committer.stopCoordinator();
-    }
-  }
-
-  private void close() {
-    if (committer != null) {
-      committer.stopWorker();
-      committer.stopCoordinator();
-      committer = null;
-    }
-
-    if (catalog != null) {
-      if (catalog instanceof AutoCloseable) {
-        try {
-          ((AutoCloseable) catalog).close();
-        } catch (Exception e) {
-          LOG.warn("An error occurred closing catalog instance, ignoring...", e);
-        }
-      }
-      catalog = null;
+    if (committer instanceof KafkaCommitter) {
+      ((KafkaCommitter) committer).stop(partitions);
+    } else if (committer instanceof Committer) {
+      ((Committer) committer).stop();
     }
   }
 
   @Override
   public void put(Collection<SinkRecord> sinkRecords) {
-    if (committer != null) {
+    if (committer == null) {
+      LOG.warn("Committer is not initialized, skipping put operation.");
+      return;
+    }
+    try {
+      LOG.debug("Processing {} records", sinkRecords.size());
       committer.save(sinkRecords);
+    } catch (Exception e) {
+      LOG.error("Error processing SinkRecords in IcebergSinkTask", e);
+      throw new RuntimeException("Failed to process records", e);
     }
   }
 
@@ -107,14 +106,45 @@ public class IcebergSinkTask extends SinkTask {
   }
 
   @Override
-  public Map<TopicPartition, OffsetAndMetadata> preCommit(
-      Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
-    // offset commit is handled by the worker
-    return ImmutableMap.of();
+  public Map<TopicPartition, OffsetAndMetadata> preCommit(Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
+    return Map.of(); // Offset commit is handled by the worker
   }
 
   @Override
   public void stop() {
-    close();
+    LOG.info("Stopping IcebergSinkTask");
+    try {
+      if (committer != null) {
+        stopCommitter();
+        committer = null;
+      }
+      stopCatalog();
+    } catch (Exception e) {
+      LOG.error("Error stopping IcebergSinkTask", e);
+    }
+  }
+
+  private void stopCommitter() {
+    if (committer == null) return;
+    try {
+      if (committer instanceof KafkaCommitter) {
+        ((KafkaCommitter) committer).stop(context.assignment());
+      } else {
+        ((Committer) committer).stop();
+      }
+    } catch (Exception e) {
+      LOG.error("Error stopping committer", e);
+    }
+  }
+
+  private void stopCatalog() {
+    if (catalog instanceof AutoCloseable) {
+      try {
+        ((AutoCloseable) catalog).close();
+      } catch (Exception e) {
+        LOG.warn("Error closing catalog instance, ignoring...", e);
+      }
+    }
+    catalog = null;
   }
 }

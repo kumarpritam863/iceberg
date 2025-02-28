@@ -18,13 +18,16 @@
  *  * under the License.
  *
  */
+
 package org.apache.iceberg.connect;
 
-import org.apache.iceberg.catalog.Catalog;
-import org.apache.kafka.connect.sink.SinkTaskContext;
+import java.util.Collection;
+import java.util.Map;
+import org.apache.kafka.connect.sink.SinkRecord;
 
-public interface Committer extends BaseCommitter {
-  void start(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context);
-
-  void stop();
+interface BaseCommitter {
+    void save(Collection<SinkRecord> sinkRecords);
+    default BaseCommitter configure(Map<String, Object> committerProperties) {
+        return this;
+    }
 }

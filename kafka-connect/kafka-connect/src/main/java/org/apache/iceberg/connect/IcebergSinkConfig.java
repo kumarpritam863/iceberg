@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect;
 
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
@@ -28,6 +29,7 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.IcebergBuild;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
@@ -41,6 +43,7 @@ import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
+import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.apache.kafka.connect.storage.ConverterConfig;
 import org.apache.kafka.connect.storage.ConverterType;
 import org.slf4j.Logger;
@@ -95,6 +98,9 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String DEFAULT_CATALOG_NAME = "iceberg";
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
   public static final String DEFAULT_CONTROL_GROUP_PREFIX = "cg-control-";
+
+  public static final String COMMITTER_IMPL_CLASS_CONFIG = "iceberg.committer.class";
+  public static final String COMMITTER_CONFIG_PREFIX = "iceberg.committer.";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts
@@ -217,6 +223,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         null,
         Importance.MEDIUM,
         "If specified, Hadoop config files in this directory will be loaded");
+    configDef.define(
+        COMMITTER_IMPL_CLASS_CONFIG,
+        ConfigDef.Type.CLASS,
+        org.apache.iceberg.connect.channel.CommitterImpl.class,
+        Importance.HIGH,
+        "Implementation of iceberg committer");
     return configDef;
   }
 
@@ -228,6 +240,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
+  private final Map<String, Object> committerConfig;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, originalProps);
@@ -251,6 +264,9 @@ public class IcebergSinkConfig extends AbstractConfig {
             ConverterConfig.TYPE_CONFIG,
             ConverterType.VALUE.getName()));
 
+    this.committerConfig = Maps.newHashMap();
+    committerConfig.putAll(PropertyUtil.propertiesWithPrefix(originalProps, COMMITTER_CONFIG_PREFIX));
+
     validate();
   }
 
@@ -271,6 +287,21 @@ public class IcebergSinkConfig extends AbstractConfig {
       throw new ConfigException(msg);
     }
   }
+
+
+  public BaseCommitter committer(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context) {
+    Class<? extends BaseCommitter> committerClass = getClass(COMMITTER_IMPL_CLASS_CONFIG).asSubclass(BaseCommitter.class);
+    try {
+      return committerClass.getConstructor(org.apache.iceberg.catalog.Catalog.class, IcebergSinkConfig.class, SinkTaskContext.class).newInstance(catalog, config, context);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to instantiate Committer", e);
+    }
+  }
+
+  public Map<String, Object> committerConfig() {
+    return committerConfig;
+  }
+
 
   public String connectorName() {
     return originalProps.get(NAME_PROP);
