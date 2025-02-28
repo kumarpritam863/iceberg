@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect;
 
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
@@ -95,6 +96,9 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String DEFAULT_CATALOG_NAME = "iceberg";
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
   public static final String DEFAULT_CONTROL_GROUP_PREFIX = "cg-control-";
+
+  public static final String COMMITTER_IMPL_CLASS_CONFIG = "iceberg.committer.class";
+  public static final String COMMITTER_CONFIG_PREFIX = "iceberg.committer.";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts
@@ -217,6 +221,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         null,
         Importance.MEDIUM,
         "If specified, Hadoop config files in this directory will be loaded");
+    configDef.define(
+        COMMITTER_IMPL_CLASS_CONFIG,
+        ConfigDef.Type.CLASS,
+        org.apache.iceberg.connect.channel.CommitterImpl.class,
+        Importance.HIGH,
+        "Implementation of iceberg committer");
     return configDef;
   }
 
@@ -228,6 +238,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
+  private final Map<String, Object> committerConfig;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, originalProps);
@@ -251,6 +262,9 @@ public class IcebergSinkConfig extends AbstractConfig {
             ConverterConfig.TYPE_CONFIG,
             ConverterType.VALUE.getName()));
 
+    this.committerConfig = Maps.newHashMap();
+    committerConfig.putAll(PropertyUtil.propertiesWithPrefix(originalProps, COMMITTER_CONFIG_PREFIX));
+
     validate();
   }
 
@@ -271,6 +285,35 @@ public class IcebergSinkConfig extends AbstractConfig {
       throw new ConfigException(msg);
     }
   }
+
+
+  public BaseCommitter committer(Object... constructorArgs) {
+    String className = getString(COMMITTER_IMPL_CLASS_CONFIG);
+    try {
+      Class<?> clazz = Class.forName(className);
+      if (!Committer.class.isAssignableFrom(clazz)) {
+        throw new IllegalArgumentException(className + " does not implement Committer");
+      }
+
+      // Get parameter types from provided arguments
+      Class<?>[] parameterTypes = Arrays.stream(constructorArgs)
+              .map(Object::getClass)
+              .toArray(Class<?>[]::new);
+
+      // Retrieve the matching constructor
+      Constructor<?> constructor = clazz.getDeclaredConstructor(parameterTypes);
+
+      // Instantiate with provided arguments
+      return (BaseCommitter) constructor.newInstance(constructorArgs);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to instantiate Committer: " + className, e);
+    }
+  }
+
+  public Map<String, Object> committerConfig() {
+    return committerConfig;
+  }
+
 
   public String connectorName() {
     return originalProps.get(NAME_PROP);

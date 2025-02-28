@@ -18,13 +18,16 @@
  *  * under the License.
  *
  */
+
 package org.apache.iceberg.connect;
 
-import org.apache.iceberg.catalog.Catalog;
-import org.apache.kafka.connect.sink.SinkTaskContext;
+import java.util.Collection;
+import org.apache.kafka.common.TopicPartition;
 
-public interface Committer extends BaseCommitter {
-  void start(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context);
+public interface KafkaCommitter extends BaseCommitter {
+    void start(Collection<TopicPartition> currentPartition);
 
-  void stop();
+    void stop(Collection<TopicPartition> currentPartition);
+
+    void syncLastCommittedOffsets();
 }
