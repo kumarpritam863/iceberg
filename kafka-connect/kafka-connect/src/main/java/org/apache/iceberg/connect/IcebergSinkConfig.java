@@ -224,7 +224,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     configDef.define(
         COMMITTER_IMPL_CLASS_CONFIG,
         ConfigDef.Type.CLASS,
-        org.apache.iceberg.connect.channel.CommitterImpl.class,
+        org.apache.iceberg.connect.channel.CommitterImpl.class.getName(),
         Importance.HIGH,
         "Implementation of iceberg committer");
     return configDef;
