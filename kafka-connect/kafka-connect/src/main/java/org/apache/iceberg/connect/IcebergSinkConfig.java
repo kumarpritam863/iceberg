@@ -29,6 +29,7 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.IcebergBuild;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
@@ -42,6 +43,7 @@ import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
+import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.apache.kafka.connect.storage.ConverterConfig;
 import org.apache.kafka.connect.storage.ConverterType;
 import org.slf4j.Logger;
@@ -224,7 +226,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     configDef.define(
         COMMITTER_IMPL_CLASS_CONFIG,
         ConfigDef.Type.CLASS,
-        org.apache.iceberg.connect.channel.CommitterImpl.class.getName(),
+        org.apache.iceberg.connect.channel.CommitterImpl.class,
         Importance.HIGH,
         "Implementation of iceberg committer");
     return configDef;
@@ -287,26 +289,12 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
 
-  public BaseCommitter committer(Object... constructorArgs) {
-    String className = getString(COMMITTER_IMPL_CLASS_CONFIG);
+  public BaseCommitter committer(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context) {
+    Class<? extends BaseCommitter> committerClass = getClass(COMMITTER_IMPL_CLASS_CONFIG).asSubclass(BaseCommitter.class);
     try {
-      Class<?> clazz = Class.forName(className);
-      if (!Committer.class.isAssignableFrom(clazz)) {
-        throw new IllegalArgumentException(className + " does not implement Committer");
-      }
-
-      // Get parameter types from provided arguments
-      Class<?>[] parameterTypes = Arrays.stream(constructorArgs)
-              .map(Object::getClass)
-              .toArray(Class<?>[]::new);
-
-      // Retrieve the matching constructor
-      Constructor<?> constructor = clazz.getDeclaredConstructor(parameterTypes);
-
-      // Instantiate with provided arguments
-      return (BaseCommitter) constructor.newInstance(constructorArgs);
+      return committerClass.getConstructor(org.apache.iceberg.catalog.Catalog.class, IcebergSinkConfig.class, SinkTaskContext.class).newInstance(catalog, config, context);
     } catch (Exception e) {
-      throw new RuntimeException("Failed to instantiate Committer: " + className, e);
+      throw new RuntimeException("Failed to instantiate Committer", e);
     }
   }
 
