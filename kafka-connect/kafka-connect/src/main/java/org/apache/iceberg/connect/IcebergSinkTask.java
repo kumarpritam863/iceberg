@@ -49,6 +49,7 @@ public class IcebergSinkTask extends SinkTask {
     // hence, we should open them only with the start call and should only close them if the task is closed by the Connect framework.
     catalog = CatalogUtils.loadCatalog(config);
     committer = CommitterFactory.createCommitter();
+
   }
 
   @Override
