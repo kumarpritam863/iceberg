@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.iceberg.IcebergBuild;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
@@ -97,6 +98,10 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String DEFAULT_CATALOG_NAME = "iceberg";
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
   public static final String DEFAULT_CONTROL_GROUP_PREFIX = "cg-control-";
+
+  private static final String ENABLE_CROSS_REGION_SUPPORT = "iceberg.cross-region-support";
+  private static final boolean ENABLE_CROSS_REGION_SUPPORT_DEFAULT = false;
+  private static final String SOURCE_OFFSET_STORAGE_TOPIC = "iceberg.source-offset-storage-topic";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts
@@ -225,6 +230,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         null,
         Importance.MEDIUM,
         "If specified, Hadoop config files in this directory will be loaded");
+    configDef.define(
+        ENABLE_CROSS_REGION_SUPPORT,
+        ConfigDef.Type.BOOLEAN,
+        ENABLE_CROSS_REGION_SUPPORT_DEFAULT,
+        Importance.MEDIUM,
+        "If specified a separate topic will be used to store the source topic offsets");
     return configDef;
   }
 
@@ -236,6 +247,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
+  private final String offsetStorageTopic;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, originalProps);
@@ -244,8 +256,21 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.catalogProps = PropertyUtil.propertiesWithPrefix(originalProps, CATALOG_PROP_PREFIX);
     this.hadoopProps = PropertyUtil.propertiesWithPrefix(originalProps, HADOOP_PROP_PREFIX);
 
-    this.kafkaProps = Maps.newHashMap(loadWorkerProps());
+    Map<String, String> workerProperties = loadWorkerProps();
+    LOG.info("loaded worker properties = {}", workerProperties);
+    this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
+    offsetStorageTopic = workerProperties.getOrDefault("offset.storage.topic", "");
+    LOG.info("Found default offset storage topic = {}", offsetStorageTopic);
+
+    if (enableCrossRegionSupport()) {
+      if (StringUtils.isBlank(offsetStorageTopic)) {
+        if (!originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
+          LOG.error("To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <iceberg.source-offset-storage-topic>");
+          throw new IllegalArgumentException("Source offset storage topic is required to enable cross region support");
+        }
+      }
+    }
 
     this.autoCreateProps =
         PropertyUtil.propertiesWithPrefix(originalProps, AUTO_CREATE_PROP_PREFIX);
@@ -278,6 +303,14 @@ public class IcebergSinkConfig extends AbstractConfig {
     if (!condition) {
       throw new ConfigException(msg);
     }
+  }
+
+  public boolean enableCrossRegionSupport() {
+    return getBoolean(ENABLE_CROSS_REGION_SUPPORT);
+  }
+
+  public String offsetStorageTopic() {
+    return offsetStorageTopic;
   }
 
   public String connectorName() {
