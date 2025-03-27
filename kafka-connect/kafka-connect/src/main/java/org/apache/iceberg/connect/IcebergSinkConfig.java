@@ -61,6 +61,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String CATALOG_PROP_PREFIX = "iceberg.catalog.";
   private static final String HADOOP_PROP_PREFIX = "iceberg.hadoop.";
   private static final String KAFKA_PROP_PREFIX = "iceberg.kafka.";
+  private static final String SOURCE_KAFKA_ADMIN_PROPS = "source.admin.kafka.";
   private static final String TABLE_PROP_PREFIX = "iceberg.table.";
   private static final String AUTO_CREATE_PROP_PREFIX = "iceberg.tables.auto-create-props.";
   private static final String WRITE_PROP_PREFIX = "iceberg.tables.write-props.";
@@ -259,6 +260,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> catalogProps;
   private final Map<String, String> hadoopProps;
   private final Map<String, String> kafkaProps;
+  private final Map<String, String> sourceKafkaAdminProps;
   private final Map<String, String> autoCreateProps;
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
@@ -277,6 +279,8 @@ public class IcebergSinkConfig extends AbstractConfig {
     LOG.info("loaded worker properties = {}", workerProperties);
     this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
+    this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
+    sourceKafkaAdminProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
     offsetStorageTopic = workerProperties.getOrDefault("offset.storage.topic", "");
     LOG.info("Found default offset storage topic = {}", offsetStorageTopic);
 
@@ -377,6 +381,10 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public Map<String, String> kafkaProps() {
     return kafkaProps;
+  }
+
+  public Map<String, String> sourceKafkaAdminProps() {
+    return sourceKafkaAdminProps;
   }
 
   public Map<String, String> autoCreateProps() {

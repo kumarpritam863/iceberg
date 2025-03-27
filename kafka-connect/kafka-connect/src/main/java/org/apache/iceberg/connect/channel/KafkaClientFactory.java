@@ -21,7 +21,6 @@ package org.apache.iceberg.connect.channel;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
-import org.apache.iceberg.util.PropertyUtil;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -36,13 +35,11 @@ import org.apache.kafka.connect.util.TopicAdmin;
 
 class KafkaClientFactory {
   private final Map<String, String> kafkaProps;
-  private final Map<String, String> kafkaSourceAdminProps;
-  public static final String KAFKA_SOURCE_ADMIN_CONFIG = "iceberg.kafka.source.admin.";
+  private final Map<String, String> sourceKafkaAdminProps;
 
-  KafkaClientFactory(Map<String, String> kafkaProps) {
+  KafkaClientFactory(Map<String, String> kafkaProps, Map<String, String> sourceKafkaAdminProps) {
     this.kafkaProps = kafkaProps;
-    this.kafkaSourceAdminProps =
-        PropertyUtil.propertiesWithPrefix(kafkaProps, KAFKA_SOURCE_ADMIN_CONFIG);
+    this.sourceKafkaAdminProps = sourceKafkaAdminProps;
   }
 
   Producer<byte[], byte[]> createProducer(String transactionalId) {
@@ -73,7 +70,7 @@ class KafkaClientFactory {
   }
 
   Admin createAdmin() {
-    Map<String, Object> adminProps = Maps.newHashMap(kafkaSourceAdminProps);
+    Map<String, Object> adminProps = Maps.newHashMap(sourceKafkaAdminProps);
     return Admin.create(adminProps);
   }
 
