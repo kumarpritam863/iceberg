@@ -196,7 +196,7 @@ public class SinkWriterTest {
             100L,
             now.toEpochMilli(),
             TimestampType.LOG_APPEND_TIME);
-    sinkWriter.save(ImmutableList.of(rec));
+    sinkWriter.save(rec);
 
     SinkWriterResult result = sinkWriter.completeWrite();
 

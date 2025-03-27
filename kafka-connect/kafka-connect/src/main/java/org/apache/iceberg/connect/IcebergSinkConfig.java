@@ -99,6 +99,16 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
   public static final String DEFAULT_CONTROL_GROUP_PREFIX = "cg-control-";
 
+  public static final String COMMITTER_IMPL_CONFIG = "iceberg.committer.impl";
+  public static final String COMMITTER_IMPL_DOC =
+      "config to override the default committer implementation";
+  public static final String COMMITTER_IMPL_DEFAULT =
+      "org.apache.iceberg.connect.channel.CommitterImpl";
+  public static final String COMMITTER_IMPL_CROSS_REGION_DEFAULT =
+      "org.apache.iceberg.connect.channel.CrossRegionCommitter";
+
+  public static final String COMMITER_IMPL_CONFIG_PREFIX = "iceberg.committer.";
+
   private static final String ENABLE_CROSS_REGION_SUPPORT = "iceberg.cross-region-support";
   private static final boolean ENABLE_CROSS_REGION_SUPPORT_DEFAULT = false;
   private static final String SOURCE_OFFSET_STORAGE_TOPIC = "iceberg.source-offset-storage-topic";
@@ -236,6 +246,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         ENABLE_CROSS_REGION_SUPPORT_DEFAULT,
         Importance.MEDIUM,
         "If specified a separate topic will be used to store the source topic offsets");
+    configDef.define(
+        COMMITTER_IMPL_CONFIG,
+        ConfigDef.Type.STRING,
+        COMMITTER_IMPL_DEFAULT,
+        Importance.HIGH,
+        COMMITTER_IMPL_DOC);
     return configDef;
   }
 
@@ -248,9 +264,10 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
   private final String offsetStorageTopic;
+  private final Map<String, String> committerConfig;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
-    super(CONFIG_DEF, originalProps);
+    super(CONFIG_DEF, overrideCommitterImplIfNeeded(originalProps));
     this.originalProps = originalProps;
 
     this.catalogProps = PropertyUtil.propertiesWithPrefix(originalProps, CATALOG_PROP_PREFIX);
@@ -266,8 +283,10 @@ public class IcebergSinkConfig extends AbstractConfig {
     if (enableCrossRegionSupport()) {
       if (StringUtils.isBlank(offsetStorageTopic)) {
         if (!originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
-          LOG.error("To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <iceberg.source-offset-storage-topic>");
-          throw new IllegalArgumentException("Source offset storage topic is required to enable cross region support");
+          LOG.error(
+              "To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <iceberg.source-offset-storage-topic>");
+          throw new IllegalArgumentException(
+              "Source offset storage topic is required to enable cross region support");
         }
       }
     }
@@ -275,6 +294,9 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.autoCreateProps =
         PropertyUtil.propertiesWithPrefix(originalProps, AUTO_CREATE_PROP_PREFIX);
     this.writeProps = PropertyUtil.propertiesWithPrefix(originalProps, WRITE_PROP_PREFIX);
+
+    this.committerConfig =
+        PropertyUtil.propertiesWithPrefix(originalProps, COMMITER_IMPL_CONFIG_PREFIX);
 
     this.jsonConverter = new JsonConverter();
     jsonConverter.configure(
@@ -285,6 +307,21 @@ public class IcebergSinkConfig extends AbstractConfig {
             ConverterType.VALUE.getName()));
 
     validate();
+  }
+
+  private static Map<String, Object> overrideCommitterImplIfNeeded(Map<String, String> props) {
+    Map<String, Object> overriddenProps = Maps.newHashMap(props);
+
+    boolean enableCrossRegion =
+        Boolean.parseBoolean(props.getOrDefault(ENABLE_CROSS_REGION_SUPPORT, "false"));
+
+    if (!props.containsKey(COMMITTER_IMPL_CONFIG)) {
+      overriddenProps.put(
+          COMMITTER_IMPL_CONFIG,
+          enableCrossRegion ? COMMITTER_IMPL_CROSS_REGION_DEFAULT : COMMITTER_IMPL_DEFAULT);
+    }
+
+    return overriddenProps;
   }
 
   private void validate() {
@@ -311,6 +348,14 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public String offsetStorageTopic() {
     return offsetStorageTopic;
+  }
+
+  public String committerImpl() {
+    return getString(COMMITTER_IMPL_CONFIG);
+  }
+
+  public Map<String, String> committerConfig() {
+    return committerConfig;
   }
 
   public String connectorName() {

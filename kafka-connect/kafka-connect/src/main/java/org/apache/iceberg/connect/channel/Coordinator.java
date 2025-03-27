@@ -95,6 +95,7 @@ class Coordinator extends Channel {
     this.commitState = new CommitState(config);
   }
 
+  @Override
   void process() {
     if (commitState.isCommitIntervalReached()) {
       // send out begin commit

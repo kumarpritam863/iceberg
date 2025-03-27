@@ -84,6 +84,32 @@ class KafkaUtils {
         });
   }
 
+  static void seekToLastCommittedOffsets(
+      SinkTaskContext context, Map<TopicPartition, Long> offsetsToBeCommitted) {
+    Consumer<byte[], byte[]> consumer = kafkaConsumer(context);
+    if (consumer == null) {
+      return;
+    }
+
+    if (offsetsToBeCommitted == null || offsetsToBeCommitted.isEmpty()) {
+      return;
+    }
+
+    offsetsToBeCommitted.forEach(
+        (topicPartition, offset) -> {
+          if (offset != null) {
+            try {
+              consumer.seek(topicPartition, offset + 1);
+            } catch (IllegalStateException e) {
+              LOG.warn(
+                  "Rebalance may have occurred, partition {} lost before seeking",
+                  topicPartition,
+                  e);
+            }
+          }
+        });
+  }
+
   @SuppressWarnings("unchecked")
   private static Consumer<byte[], byte[]> kafkaConsumer(SinkTaskContext context) {
     String contextClassName = context.getClass().getName();

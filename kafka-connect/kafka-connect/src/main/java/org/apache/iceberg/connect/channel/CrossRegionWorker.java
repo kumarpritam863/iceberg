@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -36,13 +37,12 @@ import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
-class Worker extends Channel {
-
+public class CrossRegionWorker extends CrossRegionChannel {
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
 
-  Worker(
+  CrossRegionWorker(
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkWriter sinkWriter,
@@ -104,14 +104,9 @@ class Worker extends Channel {
     Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
     events.add(readyEvent);
 
-    send(events, results.sourceOffsets());
+    send(events);
 
     return true;
-  }
-
-  @Override
-  public void start() {
-    super.start();
   }
 
   @Override
@@ -122,6 +117,12 @@ class Worker extends Channel {
 
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
-    sinkRecords.forEach(sinkWriter::save);
+    sinkRecords.forEach(
+        sinkRecord -> {
+          sinkWriter.save(sinkRecord);
+          recordOffset(
+              Collections.singletonMap(sinkRecord.topic(), sinkRecord.kafkaPartition()),
+              Collections.singletonMap(sinkRecord.topic(), sinkRecord.kafkaPartition()));
+        });
   }
 }

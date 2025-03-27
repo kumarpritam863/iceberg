@@ -21,7 +21,6 @@ package org.apache.iceberg.connect.data;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,11 +63,7 @@ public class SinkWriter {
     return new SinkWriterResult(writerResults, offsets);
   }
 
-  public void save(Collection<SinkRecord> sinkRecords) {
-    sinkRecords.forEach(this::save);
-  }
-
-  private void save(SinkRecord record) {
+  public void save(SinkRecord record) {
     // the consumer stores the offsets that corresponds to the next record to consume,
     // so increment the record offset by one
     OffsetDateTime timestamp =

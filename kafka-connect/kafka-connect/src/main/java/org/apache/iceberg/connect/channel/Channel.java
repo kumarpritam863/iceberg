@@ -18,7 +18,8 @@
  */
 package org.apache.iceberg.connect.channel;
 
-import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,9 +31,6 @@ import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
-import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -41,17 +39,13 @@ import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-abstract class Channel {
+abstract class Channel extends AbstractChannel {
 
   private static final Logger LOG = LoggerFactory.getLogger(Channel.class);
 
   private final String controlTopic;
-  private final String connectGroupId;
-  private final Producer<String, byte[]> producer;
-  private final Consumer<String, byte[]> consumer;
+  private final Producer<byte[], byte[]> producer;
   private final SinkTaskContext context;
-  private final Admin admin;
-  private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
 
   Channel(
@@ -60,35 +54,36 @@ abstract class Channel {
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
+    super(consumerGroupId, config, clientFactory);
     this.controlTopic = config.controlTopic();
-    this.connectGroupId = config.connectGroupId();
     this.context = context;
 
     String transactionalId = config.transactionalPrefix() + name + config.transactionalSuffix();
     this.producer = clientFactory.createProducer(transactionalId);
-    this.consumer = clientFactory.createConsumer(consumerGroupId);
-    this.admin = clientFactory.createAdmin();
 
     this.producerId = UUID.randomUUID().toString();
   }
 
+  @Override
   protected void send(Event event) {
     send(ImmutableList.of(event), ImmutableMap.of());
   }
 
   @SuppressWarnings("FutureReturnValueIgnored")
+  @Override
   protected void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {
     Map<TopicPartition, OffsetAndMetadata> offsetsToCommit = Maps.newHashMap();
     sourceOffsets.forEach((k, v) -> offsetsToCommit.put(k, new OffsetAndMetadata(v.offset())));
 
-    List<ProducerRecord<String, byte[]>> recordList =
+    List<ProducerRecord<byte[], byte[]>> recordList =
         events.stream()
             .map(
                 event -> {
                   LOG.info("Sending event of type: {}", event.type().name());
                   byte[] data = AvroUtil.encode(event);
                   // key by producer ID to keep event order
-                  return new ProducerRecord<>(controlTopic, producerId, data);
+                  return new ProducerRecord<>(
+                      controlTopic, producerId.getBytes(StandardCharsets.UTF_8), data);
                 })
             .collect(Collectors.toList());
 
@@ -114,54 +109,15 @@ abstract class Channel {
     }
   }
 
-  protected abstract boolean receive(Envelope envelope);
-
-  protected void consumeAvailable(Duration pollDuration) {
-    ConsumerRecords<String, byte[]> records = consumer.poll(pollDuration);
-    while (!records.isEmpty()) {
-      records.forEach(
-          record -> {
-            // the consumer stores the offsets that corresponds to the next record to consume,
-            // so increment the record offset by one
-            controlTopicOffsets.put(record.partition(), record.offset() + 1);
-
-            Event event = AvroUtil.decode(record.value());
-
-            if (event.groupId().equals(connectGroupId)) {
-              LOG.debug("Received event of type: {}", event.type().name());
-              if (receive(new Envelope(event, record.partition(), record.offset()))) {
-                LOG.info("Handled event of type: {}", event.type().name());
-              }
-            }
-          });
-      records = consumer.poll(pollDuration);
-    }
+  @Override
+  public void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
+    KafkaUtils.seekToLastCommittedOffsets(context);
   }
 
-  protected Map<Integer, Long> controlTopicOffsets() {
-    return controlTopicOffsets;
-  }
-
-  protected void commitConsumerOffsets() {
-    Map<TopicPartition, OffsetAndMetadata> offsetsToCommit = Maps.newHashMap();
-    controlTopicOffsets()
-        .forEach(
-            (k, v) ->
-                offsetsToCommit.put(new TopicPartition(controlTopic, k), new OffsetAndMetadata(v)));
-    consumer.commitSync(offsetsToCommit);
-  }
-
-  void start() {
-    consumer.subscribe(ImmutableList.of(controlTopic));
-
-    // initial poll with longer duration so the consumer will initialize...
-    consumeAvailable(Duration.ofSeconds(1));
-  }
-
+  @Override
   void stop() {
     LOG.info("Channel stopping");
+    super.stop();
     producer.close();
-    consumer.close();
-    admin.close();
   }
 }

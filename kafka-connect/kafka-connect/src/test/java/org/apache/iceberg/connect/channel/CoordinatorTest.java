@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -192,7 +193,8 @@ public class CoordinatorTest extends ChannelTestBase {
                 dataFiles,
                 deleteFiles));
     bytes = AvroUtil.encode(commitResponse);
-    consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", bytes));
+    consumer.addRecord(
+        new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key".getBytes(StandardCharsets.UTF_8), bytes));
 
     Event commitReady =
         new Event(
@@ -200,7 +202,8 @@ public class CoordinatorTest extends ChannelTestBase {
             new DataComplete(
                 commitId, ImmutableList.of(new TopicPartitionOffset("topic", 1, 1L, ts))));
     bytes = AvroUtil.encode(commitReady);
-    consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", bytes));
+    consumer.addRecord(
+        new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key".getBytes(StandardCharsets.UTF_8), bytes));
 
     when(config.commitIntervalMs()).thenReturn(0);
 

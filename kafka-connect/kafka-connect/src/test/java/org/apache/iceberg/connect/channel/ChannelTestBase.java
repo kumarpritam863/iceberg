@@ -50,7 +50,6 @@ import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
@@ -62,9 +61,9 @@ public class ChannelTestBase {
   protected Table table;
   protected IcebergSinkConfig config;
   protected KafkaClientFactory clientFactory;
-  protected MockProducer<String, byte[]> producer;
-  protected MockConsumer<String, byte[]> consumer;
-  protected MockConsumer<String, byte[]> sourceConsumer;
+  protected MockProducer<byte[], byte[]> producer;
+  protected MockConsumer<byte[], byte[]> consumer;
+  protected MockConsumer<byte[], byte[]> sourceConsumer;
   protected MockIcebergSinkTask mockIcebergSinkTask;
   protected Admin admin;
 
@@ -113,7 +112,7 @@ public class ChannelTestBase {
     admin = mock(Admin.class);
     when(admin.describeTopics(anyCollection())).thenReturn(describeResult);
 
-    producer = new MockProducer<>(false, new StringSerializer(), new ByteArraySerializer());
+    producer = new MockProducer<>(false, new ByteArraySerializer(), new ByteArraySerializer());
     producer.initTransactions();
     mockIcebergSinkTask = new MockIcebergSinkTask();
     consumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);

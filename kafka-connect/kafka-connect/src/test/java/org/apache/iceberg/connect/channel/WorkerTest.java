@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -88,13 +89,17 @@ public class WorkerTest extends ChannelTestBase {
 
       // save a record
       Map<String, Object> value = ImmutableMap.of();
-      SinkRecord rec = new SinkRecord(SRC_TOPIC_NAME, 0, null, "key", null, value, 0L);
+      SinkRecord rec =
+          new SinkRecord(
+              SRC_TOPIC_NAME, 0, null, "key".getBytes(StandardCharsets.UTF_8), null, value, 0L);
       worker.save(ImmutableList.of(rec));
 
       UUID commitId = UUID.randomUUID();
       Event commitRequest = new Event(config.connectGroupId(), new StartCommit(commitId));
       byte[] bytes = AvroUtil.encode(commitRequest);
-      consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", bytes));
+      consumer.addRecord(
+          new ConsumerRecord<>(
+              CTL_TOPIC_NAME, 0, 1, "key".getBytes(StandardCharsets.UTF_8), bytes));
 
       worker.process();
 

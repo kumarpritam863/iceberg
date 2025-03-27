@@ -20,11 +20,11 @@ package org.apache.iceberg.connect.channel;
 
 import org.apache.iceberg.connect.data.SinkWriter;
 
-public class CommitterImpl extends AbstractCommitter {
+public class CrossRegionCommitter extends AbstractCommitter {
 
   @Override
   protected AbstractChannel createWorker() {
-    return new Worker(
+    return new CrossRegionWorker(
         getConfig(), getClientFactory(), new SinkWriter(getCatalog(), getConfig()), getContext());
   }
 }
