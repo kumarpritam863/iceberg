@@ -74,7 +74,8 @@ public class OffsetStorageWriter {
     } catch (InterruptedException | TimeoutException e) {
       log.error(
           "Invalid call to OffsetStorageWriter beginFlush() while already flushing, the "
-              + "framework should not allow this", e);
+              + "framework should not allow this",
+          e);
       throw new ConnectException("OffsetStorageWriter is already flushing");
     }
   }

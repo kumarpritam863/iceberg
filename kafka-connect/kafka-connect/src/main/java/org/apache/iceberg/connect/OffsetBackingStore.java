@@ -21,7 +21,6 @@ package org.apache.iceberg.connect;
 import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.Future;
 import org.apache.kafka.connect.util.Callback;
 
@@ -34,8 +33,4 @@ public interface OffsetBackingStore {
   Future<Map<ByteBuffer, ByteBuffer>> get(Collection<ByteBuffer> keys);
 
   Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Callback<Void> callback);
-
-  Set<Map<String, Object>> connectorPartitions(String connectorName);
-
-  void configure(Map<String, Object> config);
 }

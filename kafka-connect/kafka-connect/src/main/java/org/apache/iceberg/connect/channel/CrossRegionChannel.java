@@ -85,9 +85,8 @@ abstract class CrossRegionChannel extends AbstractChannel {
     valueConverter.configure(
         Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), false);
     offsetStore =
-        KafkaOffsetBackingStore.readWriteStore(
-            config.offsetStorageTopic(), producer, consumer, admin, keyConverter);
-    this.offsetStore.configure(Map.of());
+        new KafkaOffsetBackingStore(
+            keyConverter, config.offsetStorageTopic(), producer, consumer, admin);
     this.offsetReader =
         new OffsetStorageReaderImpl(
             offsetStore, config.connectorName(), keyConverter, valueConverter);

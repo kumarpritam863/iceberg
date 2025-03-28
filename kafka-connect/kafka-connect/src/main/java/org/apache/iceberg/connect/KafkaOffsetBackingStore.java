@@ -47,60 +47,40 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class KafkaOffsetBackingStore implements OffsetBackingStore {
-  private static final Logger LOG =
-      LoggerFactory.getLogger(org.apache.kafka.connect.storage.KafkaOffsetBackingStore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(KafkaOffsetBackingStore.class);
 
   protected KafkaBasedLog<byte[], byte[]> offsetLog;
-  // Visible for testing
   private final HashMap<ByteBuffer, ByteBuffer> data = Maps.newHashMap();
   private final Map<String, Set<Map<String, Object>>> connectorPartitions = Maps.newHashMap();
-  private Converter keyConverter;
 
-  public KafkaOffsetBackingStore(Converter keyConverter) {
-    this.keyConverter = keyConverter;
-  }
-
-  public static KafkaOffsetBackingStore readWriteStore(
+  public KafkaOffsetBackingStore(
+      Converter keyConverter,
       String topic,
       Producer<byte[], byte[]> producer,
       Consumer<byte[], byte[]> consumer,
-      TopicAdmin topicAdmin,
-      Converter keyConverter) {
-    return new KafkaOffsetBackingStore(keyConverter) {
-      @Override
-      public void configure(final Map<String, Object> config) {
-        this.offsetLog =
-            KafkaBasedLog.withExistingClients(
-                topic,
-                consumer,
-                producer,
-                topicAdmin,
-                consumedCallback,
-                Time.SYSTEM,
-                null,
-                ignored -> true);
-      }
-    };
+      TopicAdmin admin) {
+    final Callback<ConsumerRecord<byte[], byte[]>> consumedCallback =
+        (error, record) -> {
+          if (error != null) {
+            LOG.error("Failed to read from the offsets topic", error);
+            return;
+          }
+
+          OffsetUtils.processPartitionKey(
+              record.key(), record.value(), keyConverter, connectorPartitions);
+
+          ByteBuffer key = record.key() != null ? ByteBuffer.wrap(record.key()) : null;
+
+          if (record.value() == null) {
+            data.remove(key);
+          } else {
+            data.put(key, ByteBuffer.wrap(record.value()));
+          }
+        };
+    this.offsetLog =
+        KafkaBasedLog.withExistingClients(
+            topic, consumer, producer, admin, consumedCallback, Time.SYSTEM, null, ignored -> true);
   }
-
-  protected final Callback<ConsumerRecord<byte[], byte[]>> consumedCallback =
-      (error, record) -> {
-        if (error != null) {
-          LOG.error("Failed to read from the offsets topic", error);
-          return;
-        }
-
-        OffsetUtils.processPartitionKey(
-            record.key(), record.value(), keyConverter, connectorPartitions);
-
-        ByteBuffer key = record.key() != null ? ByteBuffer.wrap(record.key()) : null;
-
-        if (record.value() == null) {
-          data.remove(key);
-        } else {
-          data.put(key, ByteBuffer.wrap(record.value()));
-        }
-      };
 
   @Override
   public void start() {
@@ -164,14 +144,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
 
     return producerCallback;
   }
-
-  @Override
-  public Set<Map<String, Object>> connectorPartitions(String connectorName) {
-    return Set.of();
-  }
-
-  @Override
-  public void configure(Map<String, Object> config) {}
 
   private static class SetCallbackFuture
       implements org.apache.kafka.clients.producer.Callback, Future<Void> {
