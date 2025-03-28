@@ -26,6 +26,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.KafkaOffsetBackingStore;
+import org.apache.iceberg.connect.OffsetStorageReaderImpl;
+import org.apache.iceberg.connect.OffsetStorageWriter;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -36,16 +39,9 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
-import org.apache.kafka.connect.runtime.WorkerConfig;
-import org.apache.kafka.connect.runtime.distributed.DistributedConfig;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
-import org.apache.kafka.connect.storage.ConnectorOffsetBackingStore;
 import org.apache.kafka.connect.storage.Converter;
-import org.apache.kafka.connect.storage.KafkaOffsetBackingStore;
-import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
-import org.apache.kafka.connect.storage.OffsetStorageWriter;
-import org.apache.kafka.connect.util.LoggingContext;
 import org.apache.kafka.connect.util.TopicAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,7 +53,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   private final String controlTopic;
   private final Producer<byte[], byte[]> producer;
   private final String producerId;
-  private final ConnectorOffsetBackingStore offsetStore;
+  private final KafkaOffsetBackingStore offsetStore;
   private final CloseableOffsetStorageReader offsetReader;
   private final OffsetStorageWriter offsetWriter;
   private final SinkTaskContext context;
@@ -88,16 +84,10 @@ abstract class CrossRegionChannel extends AbstractChannel {
     Converter valueConverter = new JsonConverter();
     valueConverter.configure(
         Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), false);
-    KafkaOffsetBackingStore connectorStore =
+    offsetStore =
         KafkaOffsetBackingStore.readWriteStore(
             config.offsetStorageTopic(), producer, consumer, admin, keyConverter);
-    this.offsetStore =
-        ConnectorOffsetBackingStore.withOnlyConnectorStore(
-            () -> LoggingContext.forConnector(config.connectorName()),
-            connectorStore,
-            config.offsetStorageTopic(),
-            admin);
-    this.offsetStore.configure(new CrossRegionConfig(Map.of("offset.storage.replication.factor", "1", "offset.storage.partitions", "1")));
+    this.offsetStore.configure(Map.of());
     this.offsetReader =
         new OffsetStorageReaderImpl(
             offsetStore, config.connectorName(), keyConverter, valueConverter);
