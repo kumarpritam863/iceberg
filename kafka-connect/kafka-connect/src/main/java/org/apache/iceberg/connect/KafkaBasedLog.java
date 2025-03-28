@@ -55,7 +55,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class KafkaBasedLog<K, V> {
-  private static final Logger log = LoggerFactory.getLogger(KafkaBasedLog.class);
+  private static final Logger LOG = LoggerFactory.getLogger(KafkaBasedLog.class);
   private static final long CREATE_TOPIC_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(30);
   private static final long MAX_SLEEP_MS = TimeUnit.SECONDS.toMillis(1);
   // 15min of admin retry duration to ensure successful metadata propagation.  10 seconds of backoff
@@ -65,12 +65,11 @@ public class KafkaBasedLog<K, V> {
 
   private final Time time;
   private final String topic;
-  private int partitionCount;
   private final Callback<ConsumerRecord<K, V>> consumedCallback;
   private final Supplier<TopicAdmin> topicAdminSupplier;
   private final boolean requireAdminForOffsets;
-  private Consumer<K, V> consumer;
-  private Producer<K, V> producer;
+  private final Consumer<K, V> consumer;
+  private final Producer<K, V> producer;
   private TopicAdmin admin;
   // Visible for testing
   Thread thread;
@@ -119,7 +118,7 @@ public class KafkaBasedLog<K, V> {
 
   public void start(boolean reportErrorsToCallback) {
     this.reportErrorsToCallback = reportErrorsToCallback;
-    log.info(
+    LOG.info(
         "Starting KafkaBasedLog with topic {} reportErrorsToCallback={}",
         topic,
         reportErrorsToCallback);
@@ -168,7 +167,6 @@ public class KafkaBasedLog<K, V> {
               + " exist, but no partitions matched the "
               + "required filter.");
     }
-    partitionCount = partitions.size();
     consumer.assign(partitions);
 
     // Always consume from the beginning of all partitions. Necessary to ensure that we don't use
@@ -181,20 +179,18 @@ public class KafkaBasedLog<K, V> {
     thread = new WorkThread();
     thread.start();
 
-    log.info("Finished reading KafkaBasedLog for topic " + topic);
+    LOG.info("Finished reading KafkaBasedLog for topic = {}", topic);
 
-    log.info("Started KafkaBasedLog for topic " + topic);
+    LOG.info("Started KafkaBasedLog for topic {}", topic);
   }
 
   public void stop() {
-    log.info("Stopping KafkaBasedLog for topic " + topic);
+    LOG.info("Stopping KafkaBasedLog for topic {}", topic);
 
     synchronized (this) {
       stopRequested = true;
     }
-    if (consumer != null) {
-      consumer.wakeup();
-    }
+    consumer.wakeup();
 
     if (thread != null) {
       try {
@@ -213,26 +209,11 @@ public class KafkaBasedLog<K, V> {
     // do not close the admin client, since we don't own it
     admin = null;
 
-    log.info("Stopped KafkaBasedLog for topic " + topic);
+    LOG.info("Stopped KafkaBasedLog for topic {}", topic);
   }
 
-  /**
-   * Flushes any outstanding writes and then reads to the current end of the log and invokes the
-   * specified callback. Note that this checks the current offsets, reads to them, and invokes the
-   * callback regardless of whether additional records have been written to the log. If the caller
-   * needs to ensure they have truly reached the end of the log, they must ensure there are no other
-   * writers during this period.
-   *
-   * <p>This waits until the end of all partitions has been reached.
-   *
-   * <p>This method is asynchronous. If you need a synchronous version, pass an instance of {@link
-   * org.apache.kafka.connect.util.FutureCallback} as the {@code callback} parameter and wait on it
-   * to block.
-   *
-   * @param callback the callback to invoke once the end of the log has been reached.
-   */
   public void readToEnd(Callback<Void> callback) {
-    log.trace("Starting read to end log for topic {}", topic);
+    LOG.trace("Starting read to end log for topic {}", topic);
     flush();
     synchronized (this) {
       readLogEndOffsetCallbacks.add(callback);
@@ -240,109 +221,50 @@ public class KafkaBasedLog<K, V> {
     consumer.wakeup();
   }
 
-  /** Flush the underlying producer to ensure that all pending writes have been sent. */
   public void flush() {
     producer.flush();
   }
 
-  /**
-   * Send a record asynchronously to the configured {@link #topic} without using a producer
-   * callback.
-   *
-   * <p>This method exists for backward compatibility reasons and delegates to the newer {@link
-   * #sendWithReceipt(Object, Object)} method that returns a future.
-   *
-   * @param key the key for the {@link ProducerRecord}
-   * @param value the value for the {@link ProducerRecord}
-   */
   public void send(K key, V value) {
     sendWithReceipt(key, value);
   }
 
-  /**
-   * Send a record asynchronously to the configured {@link #topic}.
-   *
-   * <p>This method exists for backward compatibility reasons and delegates to the newer {@link
-   * #sendWithReceipt(Object, Object, org.apache.kafka.clients.producer.Callback)} method that
-   * returns a future.
-   *
-   * @param key the key for the {@link ProducerRecord}
-   * @param value the value for the {@link ProducerRecord}
-   * @param callback the callback to invoke after completion; can be null if no callback is desired
-   */
   public void send(K key, V value, org.apache.kafka.clients.producer.Callback callback) {
     sendWithReceipt(key, value, callback);
   }
 
-  /**
-   * Send a record asynchronously to the configured {@link #topic} without using a producer
-   * callback.
-   *
-   * @param key the key for the {@link ProducerRecord}
-   * @param value the value for the {@link ProducerRecord}
-   * @return the future from the call to {@link Producer#send}. {@link Future#get} can be called on
-   *     this returned future if synchronous behavior is desired.
-   */
   public Future<RecordMetadata> sendWithReceipt(K key, V value) {
     return sendWithReceipt(key, value, null);
   }
 
-  /**
-   * Send a record asynchronously to the configured {@link #topic}.
-   *
-   * @param key the key for the {@link ProducerRecord}
-   * @param value the value for the {@link ProducerRecord}
-   * @param callback the callback to invoke after completion; can be null if no callback is desired
-   * @return the future from the call to {@link Producer#send}. {@link Future#get} can be called on
-   *     this returned future if synchronous behavior is desired.
-   */
   public Future<RecordMetadata> sendWithReceipt(
       K key, V value, org.apache.kafka.clients.producer.Callback callback) {
     return producer.send(new ProducerRecord<>(topic, key, value), callback);
   }
 
-  /**
-   * Signals whether a topic partition should be read by this log. Invoked on {@link #start()
-   * startup} once for every partition found in the log's backing topic.
-   *
-   * <p>This method can be overridden by subclasses when only a subset of the assigned partitions
-   * should be read into memory. By default, all partitions are read.
-   *
-   * @param topicPartition A topic partition which could be read by this log.
-   * @return true if the partition should be read by this log, false if its contents should be
-   *     ignored.
-   */
   protected boolean readPartition(TopicPartition topicPartition) {
     return readTopicPartition.test(topicPartition);
   }
 
-  private void poll(long timeoutMs) {
+  private void poll() {
     try {
-      ConsumerRecords<K, V> records = consumer.poll(Duration.ofMillis(timeoutMs));
+      ConsumerRecords<K, V> records = consumer.poll(Duration.ofMillis(Integer.MAX_VALUE));
       for (ConsumerRecord<K, V> record : records) consumedCallback.onCompletion(null, record);
     } catch (WakeupException e) {
       // Expected on get() or stop(). The calling code should handle this
       throw e;
     } catch (KafkaException e) {
-      log.error("Error polling: " + e);
+      LOG.error("Error polling:", e);
       if (reportErrorsToCallback) {
         consumedCallback.onCompletion(e, null);
       }
     }
   }
 
-  /**
-   * This method finds the end offsets of the Kafka log's topic partitions, optionally retrying if
-   * the {@code listOffsets()} method of the admin client throws a {@link RetriableException}.
-   *
-   * @param shouldRetry Boolean flag to enable retry for the admin client {@code listOffsets()}
-   *     call.
-   * @see TopicAdmin#retryEndOffsets
-   */
   private void readToLogEnd(boolean shouldRetry) {
     Set<TopicPartition> assignment = consumer.assignment();
     Map<TopicPartition, Long> endOffsets = readEndOffsets(assignment, shouldRetry);
-    log.trace("Reading to end of log offsets {}", endOffsets);
+    LOG.trace("Reading to end of log offsets {}", endOffsets);
 
     while (!endOffsets.isEmpty()) {
       Iterator<Map.Entry<TopicPartition, Long>> it = endOffsets.entrySet().iterator();
@@ -352,35 +274,24 @@ public class KafkaBasedLog<K, V> {
         long endOffset = entry.getValue();
         long lastConsumedOffset = consumer.position(topicPartition);
         if (lastConsumedOffset >= endOffset) {
-          log.trace("Read to end offset {} for {}", endOffset, topicPartition);
+          LOG.trace("Read to end offset {} for {}", endOffset, topicPartition);
           it.remove();
         } else {
-          log.trace(
+          LOG.trace(
               "Behind end offset {} for {}; last-read offset is {}",
               endOffset,
               topicPartition,
               lastConsumedOffset);
-          poll(Integer.MAX_VALUE);
+          poll();
           break;
         }
       }
     }
   }
 
-  // Visible for testing
-  /**
-   * Read to the end of the given list of topic partitions
-   *
-   * @param assignment the topic partitions to read to the end of
-   * @param shouldRetry boolean flag to enable retry for the admin client {@code listOffsets()}
-   *     call.
-   * @throws UnsupportedVersionException if the log's consumer is using the "read_committed"
-   *     isolation level (and therefore a separate admin client is required to read end offsets for
-   *     the topic), but the broker does not support reading end offsets using an admin client
-   */
   Map<TopicPartition, Long> readEndOffsets(Set<TopicPartition> assignment, boolean shouldRetry)
       throws UnsupportedVersionException {
-    log.trace("Reading to end of offset log");
+    LOG.trace("Reading to end of offset log");
 
     // Note that we'd prefer to not use the consumer to find the end offsets for the assigned topic
     // partitions.
@@ -412,9 +323,10 @@ public class KafkaBasedLog<K, V> {
           // Should be handled by the caller during log startup
           throw e;
         }
-        log.debug(
+        LOG.debug(
             "Reading to end of log offsets with consumer since admin client is unsupported: {}",
-            e.getMessage());
+            e.getMessage(),
+            e);
         // Forget the reference to the admin so that we won't even try to use the admin the next
         // time this method is called
         admin = null;
@@ -436,7 +348,7 @@ public class KafkaBasedLog<K, V> {
 
     @Override
     public void run() {
-      log.trace("{} started execution", this);
+      LOG.trace("{} started execution", this);
       while (true) {
         int numCallbacks = 0;
         try {
@@ -448,20 +360,22 @@ public class KafkaBasedLog<K, V> {
           if (numCallbacks > 0) {
             try {
               readToLogEnd(false);
-              log.trace("Finished read to end log for topic {}", topic);
+              LOG.trace("Finished read to end log for topic {}", topic);
             } catch (TimeoutException e) {
-              log.warn(
+              LOG.warn(
                   "Timeout while reading log to end for topic '{}'. Retrying automatically. "
                       + "This may occur when brokers are unavailable or unreachable. Reason: {}",
                   topic,
-                  e.getMessage());
+                  e.getMessage(),
+                  e);
               continue;
             } catch (RetriableException | org.apache.kafka.connect.errors.RetriableException e) {
-              log.warn(
+              LOG.warn(
                   "Retriable error while reading log to end for topic '{}'. Retrying automatically. "
                       + "Reason: {}",
                   topic,
-                  e.getMessage());
+                  e.getMessage(),
+                  e);
               continue;
             } catch (WakeupException e) {
               // Either received another get() call and need to retry reading to end of log or
@@ -482,14 +396,14 @@ public class KafkaBasedLog<K, V> {
           }
 
           try {
-            poll(Integer.MAX_VALUE);
+            poll();
           } catch (WakeupException e) {
             // See previous comment, both possible causes of this wakeup are handled by starting
             // this loop again
             continue;
           }
         } catch (Throwable t) {
-          log.error("Unexpected exception in {}", this, t);
+          LOG.error("Unexpected exception in {}", this, t);
           synchronized (this) {
             // Only fail exactly the number of callbacks we found before triggering the read to log
             // end
