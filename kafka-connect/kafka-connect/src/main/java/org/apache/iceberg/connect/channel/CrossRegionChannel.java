@@ -36,6 +36,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
+import org.apache.kafka.connect.runtime.WorkerConfig;
+import org.apache.kafka.connect.runtime.distributed.DistributedConfig;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
 import org.apache.kafka.connect.storage.ConnectorOffsetBackingStore;
@@ -95,6 +97,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
             connectorStore,
             config.offsetStorageTopic(),
             admin);
+    this.offsetStore.configure(new CrossRegionConfig(Map.of("offset.storage.replication.factor", "1", "offset.storage.partitions", "1")));
     this.offsetReader =
         new OffsetStorageReaderImpl(
             offsetStore, config.connectorName(), keyConverter, valueConverter);
