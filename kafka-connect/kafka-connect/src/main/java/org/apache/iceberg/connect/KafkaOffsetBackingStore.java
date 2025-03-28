@@ -41,7 +41,6 @@ import org.apache.kafka.connect.storage.Converter;
 import org.apache.kafka.connect.storage.OffsetUtils;
 import org.apache.kafka.connect.util.Callback;
 import org.apache.kafka.connect.util.ConvertingFutureCallback;
-import org.apache.kafka.connect.util.KafkaBasedLog;
 import org.apache.kafka.connect.util.TopicAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,8 +77,15 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
           }
         };
     this.offsetLog =
-        KafkaBasedLog.withExistingClients(
-            topic, consumer, producer, admin, consumedCallback, Time.SYSTEM, null, ignored -> true);
+        new KafkaBasedLog<>(
+            topic,
+            consumer,
+            producer,
+            () -> admin,
+            consumedCallback,
+            Time.SYSTEM,
+            null,
+            ignored -> true);
   }
 
   @Override
