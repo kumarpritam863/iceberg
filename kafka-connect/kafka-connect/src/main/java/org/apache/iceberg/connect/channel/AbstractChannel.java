@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.events.AvroUtil;
@@ -30,6 +31,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
@@ -50,7 +52,14 @@ public abstract class AbstractChannel {
       String consumerGroupId, IcebergSinkConfig config, KafkaClientFactory clientFactory) {
     this.controlTopic = config.controlTopic();
     this.connectGroupId = config.connectGroupId();
-    this.consumer = clientFactory.createConsumer(consumerGroupId);
+    this.consumer =
+        clientFactory.createConsumer(
+            consumerGroupId,
+            Map.of(
+                ConsumerConfig.CLIENT_ID_CONFIG,
+                UUID.randomUUID().toString(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+                "latest"));
   }
 
   protected void send(Event event) {

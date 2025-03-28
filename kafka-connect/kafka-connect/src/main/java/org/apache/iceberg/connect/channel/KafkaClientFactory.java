@@ -28,7 +28,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.IsolationLevel;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.connect.util.TopicAdmin;
@@ -58,13 +57,13 @@ class KafkaClientFactory {
     return result;
   }
 
-  Consumer<byte[], byte[]> createConsumer(String consumerGroupId) {
+  Consumer<byte[], byte[]> createConsumer(
+      String consumerGroupId, Map<String, Object> consumerPropOverrides) {
     Map<String, Object> consumerProps = Maps.newHashMap(kafkaProps);
-    consumerProps.putIfAbsent(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
-    consumerProps.putIfAbsent(ConsumerConfig.CLIENT_ID_CONFIG, UUID.randomUUID().toString());
     consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
     consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
     consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
+    consumerProps.putAll(consumerPropOverrides);
     return new KafkaConsumer<>(
         consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
   }
@@ -72,20 +71,6 @@ class KafkaClientFactory {
   Admin createAdmin() {
     Map<String, Object> adminProps = Maps.newHashMap(sourceKafkaAdminProps);
     return Admin.create(adminProps);
-  }
-
-  Consumer<byte[], byte[]> crossRegionConsumer(String consumerGroupId) {
-    Map<String, Object> consumerProps = Maps.newHashMap();
-    consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "cross-region-consumer_" + consumerGroupId);
-    consumerProps.put(
-        ConsumerConfig.CLIENT_ID_CONFIG, "cross-region-consumer_" + UUID.randomUUID());
-    consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-    consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-    consumerProps.put(
-        ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString());
-    consumerProps.putAll(kafkaProps);
-    return new KafkaConsumer<>(
-        consumerProps, new ByteArrayDeserializer(), new ByteArrayDeserializer());
   }
 
   TopicAdmin topicAdmin() {

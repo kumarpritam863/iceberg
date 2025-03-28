@@ -29,6 +29,7 @@ import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -71,7 +72,13 @@ abstract class CrossRegionChannel extends AbstractChannel {
     this.producerId = UUID.randomUUID().toString();
     this.producer = clientFactory.createProducer(transactionalId);
     Consumer<byte[], byte[]> consumer =
-        clientFactory.crossRegionConsumer("cross_region_control_consumer" + UUID.randomUUID());
+        clientFactory.createConsumer(
+            "offset_committer" + UUID.randomUUID(),
+            Map.of(
+                ConsumerConfig.CLIENT_ID_CONFIG,
+                "cross-region-consumer_" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+                "earliest"));
     TopicAdmin admin = clientFactory.topicAdmin();
     Converter keyConverter = new JsonConverter();
     keyConverter.configure(

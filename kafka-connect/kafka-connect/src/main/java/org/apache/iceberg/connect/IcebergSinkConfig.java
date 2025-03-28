@@ -280,7 +280,8 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
     this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
-    sourceKafkaAdminProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
+    sourceKafkaAdminProps.putAll(
+        PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
     offsetStorageTopic = workerProperties.getOrDefault("offset.storage.topic", "");
     LOG.info("Found default offset storage topic = {}", offsetStorageTopic);
 

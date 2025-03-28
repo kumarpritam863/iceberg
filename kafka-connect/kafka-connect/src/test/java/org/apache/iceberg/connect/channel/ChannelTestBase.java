@@ -22,6 +22,7 @@ import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -120,7 +121,7 @@ public class ChannelTestBase {
     sourceConsumer.subscribe(Collections.singleton(SRC_TOPIC_NAME), new Listener());
     clientFactory = mock(KafkaClientFactory.class);
     when(clientFactory.createProducer(any())).thenReturn(producer);
-    when(clientFactory.createConsumer(any())).thenReturn(consumer);
+    when(clientFactory.createConsumer(any(), anyMap())).thenReturn(consumer);
     when(clientFactory.createAdmin()).thenReturn(admin);
   }
 
