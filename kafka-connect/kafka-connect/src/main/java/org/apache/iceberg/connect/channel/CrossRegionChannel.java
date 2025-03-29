@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.Event;
+import org.apache.iceberg.connect.offset.store.IcebergOffsetBackingStore;
 import org.apache.iceberg.connect.offset.store.KafkaOffsetBackingStore;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -40,7 +41,6 @@ import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
 import org.apache.kafka.connect.storage.Converter;
-import org.apache.kafka.connect.storage.OffsetBackingStore;
 import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
 import org.apache.kafka.connect.storage.OffsetStorageWriter;
 import org.apache.kafka.connect.util.TopicAdmin;
@@ -54,7 +54,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   private final String controlTopic;
   private final Producer<byte[], byte[]> producer;
   private final String producerId;
-  private final OffsetBackingStore offsetStore;
+  private final IcebergOffsetBackingStore offsetStore;
   private final CloseableOffsetStorageReader offsetReader;
   private final OffsetStorageWriter offsetWriter;
   private final SinkTaskContext context;
@@ -88,7 +88,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
     offsetStore =
         KafkaOffsetBackingStore.readWriteStore(
             config.offsetStorageTopic(), producer, consumer, admin, keyConverter);
-    offsetStore.configure(config.workerConfig());
+    offsetStore.configure(Map.of());
     this.offsetReader =
         new OffsetStorageReaderImpl(
             offsetStore, config.connectorName(), keyConverter, valueConverter);
