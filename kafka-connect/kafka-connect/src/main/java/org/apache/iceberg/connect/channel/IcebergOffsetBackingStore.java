@@ -16,13 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.iceberg.connect.offset.store;
+package org.apache.iceberg.connect.channel;
 
 import java.util.Map;
 import org.apache.kafka.connect.runtime.WorkerConfig;
 import org.apache.kafka.connect.storage.OffsetBackingStore;
 
-public interface IcebergOffsetBackingStore extends OffsetBackingStore {
+interface IcebergOffsetBackingStore extends OffsetBackingStore {
   @Override
   default void configure(WorkerConfig config) {}
 

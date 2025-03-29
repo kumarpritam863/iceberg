@@ -44,27 +44,10 @@ abstract class AbstractCommitter implements Committer {
 
   private CoordinatorThread coordinatorThread;
   private AbstractChannel worker;
-  private Catalog catalog;
-
-  public Catalog getCatalog() {
-    return catalog;
-  }
-
-  public IcebergSinkConfig getConfig() {
-    return config;
-  }
-
-  public SinkTaskContext getContext() {
-    return context;
-  }
-
-  public KafkaClientFactory getClientFactory() {
-    return clientFactory;
-  }
-
-  private IcebergSinkConfig config;
-  private SinkTaskContext context;
-  private KafkaClientFactory clientFactory;
+  Catalog catalog;
+  IcebergSinkConfig config;
+  SinkTaskContext context;
+  KafkaClientFactory clientFactory;
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
@@ -181,6 +164,11 @@ abstract class AbstractCommitter implements Committer {
           && containsFirstPartition(groupDesc.members(), currentAssignedPartitions)) {
         this.membersWhenWorkerIsCoordinator = groupDesc.members();
         return true;
+      } else {
+        LOG.warn(
+            "Consumer group state for consumer group id = {} is {}. Make sure the value configured in <iceberg.connect.group-id> is the consumer group id",
+            config.connectGroupId(),
+            groupDesc.state().name());
       }
     }
     return false;

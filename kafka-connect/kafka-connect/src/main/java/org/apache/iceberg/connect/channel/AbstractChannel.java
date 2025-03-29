@@ -66,11 +66,13 @@ public abstract class AbstractChannel {
     send(ImmutableList.of(event), ImmutableMap.of());
   }
 
-  protected void send(List<Event> events) {}
+  protected void send(List<Event> events) {
+    send(events, ImmutableMap.of());
+  }
 
   protected void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {}
 
-  protected abstract boolean receive(Envelope envelope);
+  abstract boolean receive(Envelope envelope);
 
   protected void consumeAvailable(Duration pollDuration) {
     ConsumerRecords<byte[], byte[]> records = consumer.poll(pollDuration);

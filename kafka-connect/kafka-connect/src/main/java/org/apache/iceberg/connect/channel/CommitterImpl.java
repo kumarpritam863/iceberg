@@ -24,7 +24,6 @@ public class CommitterImpl extends AbstractCommitter {
 
   @Override
   protected AbstractChannel createWorker() {
-    return new Worker(
-        getConfig(), getClientFactory(), new SinkWriter(getCatalog(), getConfig()), getContext());
+    return new Worker(config, clientFactory, new SinkWriter(catalog, config), context);
   }
 }

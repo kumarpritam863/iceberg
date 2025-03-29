@@ -28,8 +28,6 @@ import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.Event;
-import org.apache.iceberg.connect.offset.store.IcebergOffsetBackingStore;
-import org.apache.iceberg.connect.offset.store.KafkaOffsetBackingStore;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;

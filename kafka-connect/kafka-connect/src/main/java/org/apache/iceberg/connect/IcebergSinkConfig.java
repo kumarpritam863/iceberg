@@ -302,11 +302,13 @@ public class IcebergSinkConfig extends AbstractConfig {
             "Obtained offset storage topic from job config was empty. Falling back to global storage topic.");
         if (!workerProperties.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
           LOG.error(
-              "To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <iceberg.source-offset-storage-topic>");
-          throw new IllegalArgumentException(
+              "To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <{}>",
+              SOURCE_OFFSET_STORAGE_TOPIC);
+          throw new ConfigException(
               "Source offset storage topic is required to enable cross region support");
         }
-        LOG.warn("Using connect offset internal topic as offset storage topic, make sure connect and iceberg internal topic is sharing the same brokers");
+        LOG.warn(
+            "Using connect offset internal topic as offset storage topic, make sure connect and iceberg internal topic is sharing the same brokers");
         offsetStorageTopic = workerProperties.get(SOURCE_OFFSET_STORAGE_TOPIC);
       }
       try {
@@ -316,7 +318,7 @@ public class IcebergSinkConfig extends AbstractConfig {
           validateOffsetStorageTopic(offsetStorageTopic, sourceKafkaAdminProps);
         }
       } catch (ConfigException configException) {
-        LOG.error("Failed to validate / create topic {}", offsetStorageTopic);
+        LOG.error("Failed to validate / create topic {}", offsetStorageTopic, configException);
         throw configException;
       }
     }
@@ -340,17 +342,17 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   private void validateOffsetStorageTopic(
-      String offsetStorageTopic, Map<String, String> sourceKafkaAdminProps) {
+      String topic, Map<String, String> sourceKafkaAdminProps) {
     try (Admin admin = Admin.create(Maps.newHashMap(sourceKafkaAdminProps))) {
-      if (topicExists(admin, offsetStorageTopic)) {
+      if (topicExists(admin, topic)) {
         LOG.error(
             "Topic {} exist, validating for partition, replication_factor and compactness",
-            offsetStorageTopic);
-        validateTopicConfig(admin, offsetStorageTopic);
+            topic);
+        validateTopicConfig(admin, topic);
       } else {
-        LOG.warn("Topic {} does not exist. Creating...", offsetStorageTopic);
-        createCompactedTopic(admin, offsetStorageTopic);
-        LOG.info("Topic {} created: ", offsetStorageTopic);
+        LOG.warn("Topic {} does not exist. Creating...", topic);
+        createCompactedTopic(admin, topic);
+        LOG.info("Topic {} created: ", topic);
       }
     }
   }
@@ -441,7 +443,7 @@ public class IcebergSinkConfig extends AbstractConfig {
       admin.createTopics(Collections.singletonList(newTopic)).all().get();
     } catch (InterruptedException | ExecutionException e) {
       if (e.getCause() instanceof TopicExistsException) {
-        LOG.info("Topic {} already exist", offsetStorageTopic);
+        LOG.info("Topic {} already exist", offsetStorageTopic, e);
       } else {
         throw new ConfigException(
             String.format(

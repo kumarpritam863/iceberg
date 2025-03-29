@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.iceberg.connect.offset.store;
+package org.apache.iceberg.connect.channel;
 
 import java.nio.ByteBuffer;
 import java.util.Collection;
@@ -47,7 +47,7 @@ import org.apache.kafka.connect.util.TopicAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class KafkaOffsetBackingStore implements IcebergOffsetBackingStore {
+class KafkaOffsetBackingStore implements IcebergOffsetBackingStore {
 
   private static final Logger LOG = LoggerFactory.getLogger(KafkaOffsetBackingStore.class);
 
@@ -57,11 +57,11 @@ public class KafkaOffsetBackingStore implements IcebergOffsetBackingStore {
   private final Map<String, Set<Map<String, Object>>> connectorPartitions = Maps.newHashMap();
   private Converter keyConverter;
 
-  public KafkaOffsetBackingStore(Converter keyConverter) {
+  KafkaOffsetBackingStore(Converter keyConverter) {
     this.keyConverter = keyConverter;
   }
 
-  public static KafkaOffsetBackingStore readWriteStore(
+  static KafkaOffsetBackingStore readWriteStore(
       String topic,
       Producer<byte[], byte[]> producer,
       Consumer<byte[], byte[]> consumer,
