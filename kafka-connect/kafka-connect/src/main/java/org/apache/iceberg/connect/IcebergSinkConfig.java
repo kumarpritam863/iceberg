@@ -270,12 +270,12 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> catalogProps;
   private final Map<String, String> hadoopProps;
   private final Map<String, String> kafkaProps;
-  private final Map<String, String> sourceKafkaAdminProps;
+  private Map<String, String> sourceKafkaAdminProps;
   private final Map<String, String> autoCreateProps;
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
-  private final String offsetStorageTopic;
+  private String offsetStorageTopic;
   private final Map<String, String> committerConfig;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
@@ -306,6 +306,8 @@ public class IcebergSinkConfig extends AbstractConfig {
           throw new IllegalArgumentException(
               "Source offset storage topic is required to enable cross region support");
         }
+        LOG.warn("Using connect offset internal topic as offset storage topic, make sure connect and iceberg internal topic is sharing the same brokers");
+        offsetStorageTopic = workerProperties.get(SOURCE_OFFSET_STORAGE_TOPIC);
       }
       try {
         if (originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
@@ -317,9 +319,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         LOG.error("Failed to validate / create topic {}", offsetStorageTopic);
         throw configException;
       }
-    } else {
-      offsetStorageTopic = "";
-      this.sourceKafkaAdminProps = Maps.newHashMap();
     }
 
     this.autoCreateProps =
