@@ -22,9 +22,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
@@ -36,10 +38,18 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.util.PropertyUtil;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.DescribeConfigsResult;
+import org.apache.kafka.clients.admin.DescribeTopicsResult;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.storage.ConverterConfig;
@@ -112,7 +122,7 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String ENABLE_CROSS_REGION_SUPPORT = "iceberg.cross-region-support";
   private static final boolean ENABLE_CROSS_REGION_SUPPORT_DEFAULT = false;
-  private static final String SOURCE_OFFSET_STORAGE_TOPIC = "iceberg.source-offset-storage-topic";
+  private static final String SOURCE_OFFSET_STORAGE_TOPIC = "offset.storage.topic";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts
@@ -279,21 +289,37 @@ public class IcebergSinkConfig extends AbstractConfig {
     LOG.info("loaded worker properties = {}", workerProperties);
     this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
-    this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
-    sourceKafkaAdminProps.putAll(
-        PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
-    offsetStorageTopic = workerProperties.getOrDefault("offset.storage.topic", "");
-    LOG.info("Found default offset storage topic = {}", offsetStorageTopic);
-
     if (enableCrossRegionSupport()) {
+      offsetStorageTopic = originalProps.getOrDefault(SOURCE_OFFSET_STORAGE_TOPIC, "");
+      this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
+      sourceKafkaAdminProps.putAll(
+          PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
+      LOG.info(
+          "Cross region support enabled. Found offset storage topic from config {}",
+          offsetStorageTopic);
       if (StringUtils.isBlank(offsetStorageTopic)) {
-        if (!originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
+        LOG.info(
+            "Obtained offset storage topic from job config was empty. Falling back to global storage topic.");
+        if (!workerProperties.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
           LOG.error(
               "To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <iceberg.source-offset-storage-topic>");
           throw new IllegalArgumentException(
               "Source offset storage topic is required to enable cross region support");
         }
       }
+      try {
+        if (originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
+          LOG.info(
+              "Attempting to validate/create topic only if topic is provided by user as connect internal topics are validated / created during connect startup");
+          validateOffsetStorageTopic(offsetStorageTopic, sourceKafkaAdminProps);
+        }
+      } catch (ConfigException configException) {
+        LOG.error("Failed to validate / create topic {}", offsetStorageTopic);
+        throw configException;
+      }
+    } else {
+      offsetStorageTopic = "";
+      this.sourceKafkaAdminProps = Maps.newHashMap();
     }
 
     this.autoCreateProps =
@@ -312,6 +338,118 @@ public class IcebergSinkConfig extends AbstractConfig {
             ConverterType.VALUE.getName()));
 
     validate();
+  }
+
+  private void validateOffsetStorageTopic(
+      String offsetStorageTopic, Map<String, String> sourceKafkaAdminProps) {
+    try (Admin admin = Admin.create(Maps.newHashMap(sourceKafkaAdminProps))) {
+      if (topicExists(admin, offsetStorageTopic)) {
+        LOG.error(
+            "Topic {} exist, validating for partition, replication_factor and compactness",
+            offsetStorageTopic);
+        validateTopicConfig(admin, offsetStorageTopic);
+      } else {
+        LOG.warn("Topic {} does not exist. Creating...", offsetStorageTopic);
+        createCompactedTopic(admin, offsetStorageTopic);
+        LOG.info("Topic {} created: ", offsetStorageTopic);
+      }
+    }
+  }
+
+  private boolean topicExists(Admin admin, String topicName) {
+    try {
+      return admin.listTopics().names().get().contains(topicName);
+    } catch (InterruptedException | ExecutionException e) {
+      throw new ConfigException(
+          String.format("Failed to check if the topic {%s} exists?", offsetStorageTopic), e);
+    }
+  }
+
+  private int getBrokerCount(Admin admin) throws ExecutionException, InterruptedException {
+    return admin.describeCluster().nodes().get().size();
+  }
+
+  private void validateTopicConfig(Admin admin, String topicName) {
+    DescribeTopicsResult describeTopicsResult =
+        admin.describeTopics(Collections.singleton(topicName));
+    TopicDescription topicDescription;
+    try {
+      topicDescription = describeTopicsResult.topicNameValues().get(topicName).get();
+    } catch (InterruptedException | ExecutionException e) {
+      throw new ConfigException(
+          String.format("Failed to obtain topic description for topic = {%s}", offsetStorageTopic),
+          e);
+    }
+
+    // 1. Check partition count
+    int partitionCount = topicDescription.partitions().size();
+    if (partitionCount != 1) {
+      throw new ConfigException("Invalid partition count: expected 1, found " + partitionCount);
+    }
+
+    // 2. Check replication factor
+    int actualRF = topicDescription.partitions().get(0).replicas().size();
+    int brokerCount;
+    try {
+      brokerCount = getBrokerCount(admin);
+    } catch (InterruptedException | ExecutionException e) {
+      throw new ConfigException(
+          "Failed to get the broker count, required for validating replication factor", e);
+    }
+    int requiredRF = Math.min(3, brokerCount);
+
+    if (actualRF < requiredRF) {
+      throw new ConfigException(
+          "Invalid replication factor: required >= " + requiredRF + ", found " + actualRF);
+    }
+
+    // 3. Check cleanup.policy = compact
+    ConfigResource resource = new ConfigResource(ConfigResource.Type.TOPIC, topicName);
+    DescribeConfigsResult configsResult = admin.describeConfigs(Collections.singleton(resource));
+    Config config;
+    try {
+      config = configsResult.all().get().get(resource);
+    } catch (InterruptedException | ExecutionException e) {
+      throw new ConfigException(
+          String.format("Failed to obtain the cleanup.policy for topic {%s}", offsetStorageTopic),
+          e);
+    }
+
+    String cleanupPolicy = config.get("cleanup.policy").value();
+    if (!"compact".equalsIgnoreCase(cleanupPolicy)) {
+      throw new ConfigException(
+          "Invalid cleanup.policy: expected 'compact', found '" + cleanupPolicy + "'");
+    }
+  }
+
+  private void createCompactedTopic(Admin admin, String topicName) {
+    int brokerCount;
+    try {
+      brokerCount = getBrokerCount(admin);
+    } catch (InterruptedException | ExecutionException e) {
+      throw new ConfigException(
+          "Failed to get the broker count, required for determining replication factor", e);
+    }
+    int replicationFactor = Math.min(3, brokerCount);
+    int partitions = 1;
+
+    NewTopic newTopic = new NewTopic(topicName, partitions, (short) replicationFactor);
+    Map<String, String> configs = Maps.newHashMap();
+    configs.put("cleanup.policy", "compact");
+    newTopic.configs(configs);
+
+    try {
+      admin.createTopics(Collections.singletonList(newTopic)).all().get();
+    } catch (InterruptedException | ExecutionException e) {
+      if (e.getCause() instanceof TopicExistsException) {
+        LOG.info("Topic {} already exist", offsetStorageTopic);
+      } else {
+        throw new ConfigException(
+            String.format(
+                "Failed to create offset storage topic with name {%s}", offsetStorageTopic),
+            e);
+      }
+    }
   }
 
   private static Map<String, Object> overrideCommitterImplIfNeeded(Map<String, String> props) {
