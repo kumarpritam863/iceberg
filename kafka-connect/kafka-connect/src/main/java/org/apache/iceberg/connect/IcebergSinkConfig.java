@@ -42,6 +42,8 @@ import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
+import org.apache.kafka.connect.runtime.WorkerConfig;
+import org.apache.kafka.connect.runtime.distributed.DistributedConfig;
 import org.apache.kafka.connect.storage.ConverterConfig;
 import org.apache.kafka.connect.storage.ConverterType;
 import org.slf4j.Logger;
@@ -267,6 +269,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final JsonConverter jsonConverter;
   private final String offsetStorageTopic;
   private final Map<String, String> committerConfig;
+  private final WorkerConfig workerConfig;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, overrideCommitterImplIfNeeded(originalProps));
@@ -276,6 +279,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.hadoopProps = PropertyUtil.propertiesWithPrefix(originalProps, HADOOP_PROP_PREFIX);
 
     Map<String, String> workerProperties = loadWorkerProps();
+    workerConfig = new DistributedConfig(workerProperties);
     LOG.info("loaded worker properties = {}", workerProperties);
     this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
@@ -345,6 +349,10 @@ public class IcebergSinkConfig extends AbstractConfig {
     if (!condition) {
       throw new ConfigException(msg);
     }
+  }
+
+  public WorkerConfig workerConfig() {
+    return workerConfig;
   }
 
   public boolean enableCrossRegionSupport() {
