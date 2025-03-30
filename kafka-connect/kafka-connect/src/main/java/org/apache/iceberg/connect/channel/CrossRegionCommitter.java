@@ -23,7 +23,7 @@ import org.apache.iceberg.connect.data.SinkWriter;
 public class CrossRegionCommitter extends AbstractCommitter {
 
   @Override
-  protected AbstractChannel createWorker() {
+  AbstractChannel createWorker() {
     return new CrossRegionWorker(config, clientFactory, new SinkWriter(catalog, config), context);
   }
 }

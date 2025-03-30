@@ -51,9 +51,9 @@ abstract class AbstractCommitter implements Committer {
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
-  protected abstract AbstractChannel createWorker();
+  abstract AbstractChannel createWorker();
 
-  protected Coordinator createCoordinator(Collection<MemberDescription> members) {
+  Coordinator createCoordinator(Collection<MemberDescription> members) {
     return new Coordinator(catalog, config, members, clientFactory, context);
   }
 

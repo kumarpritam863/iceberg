@@ -61,7 +61,7 @@ class Worker extends Channel {
   }
 
   @Override
-  protected boolean receive(Envelope envelope) {
+  boolean receive(Envelope envelope) {
     Event event = envelope.event();
     if (event.payload().type() != PayloadType.START_COMMIT) {
       return false;
@@ -110,18 +110,18 @@ class Worker extends Channel {
   }
 
   @Override
-  public void start() {
+  void start() {
     super.start();
   }
 
   @Override
-  public void stop() {
+  void stop() {
     super.stop();
     sinkWriter.close();
   }
 
   @Override
-  public void save(Collection<SinkRecord> sinkRecords) {
+  void save(Collection<SinkRecord> sinkRecords) {
     sinkRecords.forEach(sinkWriter::save);
   }
 }

@@ -39,7 +39,7 @@ import org.apache.kafka.connect.sink.SinkRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public abstract class AbstractChannel {
+abstract class AbstractChannel {
   private static final Logger LOG = LoggerFactory.getLogger(AbstractChannel.class);
 
   private final String controlTopic;
@@ -62,19 +62,19 @@ public abstract class AbstractChannel {
                 "latest"));
   }
 
-  protected void send(Event event) {
+  void send(Event event) {
     send(ImmutableList.of(event), ImmutableMap.of());
   }
 
-  protected void send(List<Event> events) {
+  void send(List<Event> events) {
     send(events, ImmutableMap.of());
   }
 
-  protected void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {}
+  void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {}
 
   abstract boolean receive(Envelope envelope);
 
-  protected void consumeAvailable(Duration pollDuration) {
+  void consumeAvailable(Duration pollDuration) {
     ConsumerRecords<byte[], byte[]> records = consumer.poll(pollDuration);
     while (!records.isEmpty()) {
       records.forEach(
@@ -96,11 +96,11 @@ public abstract class AbstractChannel {
     }
   }
 
-  protected Map<Integer, Long> controlTopicOffsets() {
+  Map<Integer, Long> controlTopicOffsets() {
     return controlTopicOffsets;
   }
 
-  protected void commitConsumerOffsets() {
+  void commitConsumerOffsets() {
     Map<TopicPartition, OffsetAndMetadata> offsetsToCommit = Maps.newHashMap();
     controlTopicOffsets()
         .forEach(
@@ -118,7 +118,7 @@ public abstract class AbstractChannel {
 
   void recordOffset(Map<String, ?> partition, Map<String, ?> offset) {}
 
-  public void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {}
+  void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {}
 
   void stop() {
     LOG.info("Channel stopping");

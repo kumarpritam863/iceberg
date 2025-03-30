@@ -65,13 +65,13 @@ abstract class Channel extends AbstractChannel {
   }
 
   @Override
-  protected void send(Event event) {
+  void send(Event event) {
     send(ImmutableList.of(event), ImmutableMap.of());
   }
 
   @SuppressWarnings("FutureReturnValueIgnored")
   @Override
-  protected void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {
+  void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {
     Map<TopicPartition, OffsetAndMetadata> offsetsToCommit = Maps.newHashMap();
     sourceOffsets.forEach((k, v) -> offsetsToCommit.put(k, new OffsetAndMetadata(v.offset())));
 
@@ -110,7 +110,7 @@ abstract class Channel extends AbstractChannel {
   }
 
   @Override
-  public void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
+  void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
     KafkaUtils.seekToLastCommittedOffsets(context);
   }
 

@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
@@ -98,7 +99,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   }
 
   @Override
-  protected void send(List<Event> events) {
+  void send(List<Event> events) {
     List<ProducerRecord<byte[], byte[]>> recordList =
         events.stream()
             .map(
@@ -144,7 +145,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   }
 
   @Override
-  public void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
+  void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
     Map<TopicPartition, Long> offsetsToBeCommitted =
         topicPartitions.stream()
             .collect(
@@ -155,11 +156,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
                           offsetReader.offset(Collections.singletonMap(tp.topic(), tp.partition()));
                       if (null != storedOffset) {
                         Long offset = (Long) storedOffset.get(tp.topic());
-                        if (null != offset) {
-                          return offset;
-                        } else {
-                          return -1L;
-                        }
+                        return Objects.requireNonNullElse(offset, -1L);
                       } else {
                         return -1L;
                       }
@@ -168,12 +165,12 @@ abstract class CrossRegionChannel extends AbstractChannel {
   }
 
   @Override
-  public void recordOffset(Map<String, ?> partition, Map<String, ?> offset) {
+  void recordOffset(Map<String, ?> partition, Map<String, ?> offset) {
     offsetWriter.offset(partition, offset);
   }
 
   @Override
-  public void start() {
+  void start() {
     super.start();
     offsetStore.start();
   }

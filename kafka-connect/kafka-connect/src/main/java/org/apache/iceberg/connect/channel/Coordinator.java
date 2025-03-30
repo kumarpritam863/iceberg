@@ -148,10 +148,7 @@ class Coordinator extends Channel {
     Tasks.foreach(commitMap.entrySet())
         .executeWith(exec)
         .stopOnFailure()
-        .run(
-            entry -> {
-              commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-            });
+        .run(entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -291,7 +288,7 @@ class Coordinator extends Channel {
       Map<String, String> summary = snapshot.summary();
       String value = summary.get(snapshotOffsetsProp);
       if (value != null) {
-        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
+        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {};
         try {
           return MAPPER.readValue(value, typeRef);
         } catch (IOException e) {

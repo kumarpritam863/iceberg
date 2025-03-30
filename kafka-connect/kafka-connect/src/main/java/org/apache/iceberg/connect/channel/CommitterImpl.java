@@ -23,7 +23,7 @@ import org.apache.iceberg.connect.data.SinkWriter;
 public class CommitterImpl extends AbstractCommitter {
 
   @Override
-  protected AbstractChannel createWorker() {
+  AbstractChannel createWorker() {
     return new Worker(config, clientFactory, new SinkWriter(catalog, config), context);
   }
 }
