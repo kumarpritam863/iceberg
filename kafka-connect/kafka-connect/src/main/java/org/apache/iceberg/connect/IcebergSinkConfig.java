@@ -71,7 +71,6 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String CATALOG_PROP_PREFIX = "iceberg.catalog.";
   private static final String HADOOP_PROP_PREFIX = "iceberg.hadoop.";
   private static final String KAFKA_PROP_PREFIX = "iceberg.kafka.";
-  private static final String SOURCE_KAFKA_ADMIN_PROPS = "source.admin.kafka.";
   private static final String TABLE_PROP_PREFIX = "iceberg.table.";
   private static final String AUTO_CREATE_PROP_PREFIX = "iceberg.tables.auto-create-props.";
   private static final String WRITE_PROP_PREFIX = "iceberg.tables.write-props.";
@@ -270,7 +269,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> catalogProps;
   private final Map<String, String> hadoopProps;
   private final Map<String, String> kafkaProps;
-  private Map<String, String> sourceKafkaAdminProps;
+  private final Map<String, String> sourceKafkaAdminProps;
   private final Map<String, String> autoCreateProps;
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
@@ -289,11 +288,11 @@ public class IcebergSinkConfig extends AbstractConfig {
     LOG.info("loaded worker properties = {}", workerProperties);
     this.kafkaProps = Maps.newHashMap(workerProperties);
     kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
+    this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
+    sourceKafkaAdminProps.putAll(
+        PropertyUtil.propertiesWithPrefix(originalProps, "consumer.override."));
     if (enableCrossRegionSupport()) {
       offsetStorageTopic = originalProps.getOrDefault(SOURCE_OFFSET_STORAGE_TOPIC, "");
-      this.sourceKafkaAdminProps = Maps.newHashMap(workerProperties);
-      sourceKafkaAdminProps.putAll(
-          PropertyUtil.propertiesWithPrefix(originalProps, SOURCE_KAFKA_ADMIN_PROPS));
       LOG.info(
           "Cross region support enabled. Found offset storage topic from config {}",
           offsetStorageTopic);
@@ -312,10 +311,10 @@ public class IcebergSinkConfig extends AbstractConfig {
         offsetStorageTopic = workerProperties.get(SOURCE_OFFSET_STORAGE_TOPIC);
       }
       try {
-        if (originalProps.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
+        if (!StringUtils.isBlank(originalProps.get(SOURCE_OFFSET_STORAGE_TOPIC))) {
           LOG.info(
               "Attempting to validate/create topic only if topic is provided by user as connect internal topics are validated / created during connect startup");
-          validateOffsetStorageTopic(offsetStorageTopic, sourceKafkaAdminProps);
+          validateOffsetStorageTopic(offsetStorageTopic, kafkaProps);
         }
       } catch (ConfigException configException) {
         LOG.error("Failed to validate / create topic {}", offsetStorageTopic, configException);
@@ -341,13 +340,11 @@ public class IcebergSinkConfig extends AbstractConfig {
     validate();
   }
 
-  private void validateOffsetStorageTopic(
-      String topic, Map<String, String> sourceKafkaAdminProps) {
+  private void validateOffsetStorageTopic(String topic, Map<String, String> sourceKafkaAdminProps) {
     try (Admin admin = Admin.create(Maps.newHashMap(sourceKafkaAdminProps))) {
       if (topicExists(admin, topic)) {
         LOG.error(
-            "Topic {} exist, validating for partition, replication_factor and compactness",
-            topic);
+            "Topic {} exist, validating for partition, replication_factor and compactness", topic);
         validateTopicConfig(admin, topic);
       } else {
         LOG.warn("Topic {} does not exist. Creating...", topic);
