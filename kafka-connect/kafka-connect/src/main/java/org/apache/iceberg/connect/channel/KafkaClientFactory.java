@@ -33,12 +33,12 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.connect.util.TopicAdmin;
 
 class KafkaClientFactory {
-  private final Map<String, String> kafkaProps;
-  private final Map<String, String> sourceKafkaAdminProps;
+  private final Map<String, String> controlKafkaProps;
+  private final Map<String, String> sourceKafkaProps;
 
-  KafkaClientFactory(Map<String, String> kafkaProps, Map<String, String> sourceKafkaAdminProps) {
-    this.kafkaProps = kafkaProps;
-    this.sourceKafkaAdminProps = sourceKafkaAdminProps;
+  KafkaClientFactory(Map<String, String> controlKafkaProps, Map<String, String> sourceKafkaProps) {
+    this.controlKafkaProps = controlKafkaProps;
+    this.sourceKafkaProps = sourceKafkaProps;
   }
 
   Producer<byte[], byte[]> createProducer(String transactionalId) {
@@ -50,7 +50,7 @@ class KafkaClientFactory {
         ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
     producerProps.put(ProducerConfig.CLIENT_ID_CONFIG, "cross-region_" + UUID.randomUUID());
     producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
-    producerProps.putAll(kafkaProps);
+    producerProps.putAll(controlKafkaProps);
     KafkaProducer<byte[], byte[]> result =
         new KafkaProducer<>(producerProps, new ByteArraySerializer(), new ByteArraySerializer());
     result.initTransactions();
@@ -59,7 +59,7 @@ class KafkaClientFactory {
 
   Consumer<byte[], byte[]> createConsumer(
       String consumerGroupId, Map<String, Object> consumerPropOverrides) {
-    Map<String, Object> consumerProps = Maps.newHashMap(kafkaProps);
+    Map<String, Object> consumerProps = Maps.newHashMap(controlKafkaProps);
     consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
     consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
     consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
@@ -69,11 +69,11 @@ class KafkaClientFactory {
   }
 
   Admin createAdmin() {
-    Map<String, Object> adminProps = Maps.newHashMap(sourceKafkaAdminProps);
+    Map<String, Object> adminProps = Maps.newHashMap(sourceKafkaProps);
     return Admin.create(adminProps);
   }
 
   TopicAdmin topicAdmin() {
-    return new TopicAdmin(Maps.newHashMap(kafkaProps));
+    return new TopicAdmin(Maps.newHashMap(controlKafkaProps));
   }
 }

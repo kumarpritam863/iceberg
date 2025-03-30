@@ -66,7 +66,7 @@ abstract class AbstractCommitter implements Committer {
       this.config = icebergSinkConfig;
       this.context = sinkTaskContext;
       this.clientFactory =
-          new KafkaClientFactory(config.kafkaProps(), config.sourceKafkaAdminProps());
+          new KafkaClientFactory(config.controlKafkaProps(), config.sourceKafkaProps());
     }
   }
 

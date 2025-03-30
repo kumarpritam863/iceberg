@@ -34,6 +34,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -56,6 +57,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   private final CloseableOffsetStorageReader offsetReader;
   private final OffsetStorageWriter offsetWriter;
   private final SinkTaskContext context;
+  private final TopicAdmin admin;
 
   CrossRegionChannel(
       String name,
@@ -76,7 +78,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
                 "cross-region-consumer_" + UUID.randomUUID(),
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
                 "earliest"));
-    TopicAdmin admin = clientFactory.topicAdmin();
+    admin = clientFactory.topicAdmin();
     Converter keyConverter = new JsonConverter();
     keyConverter.configure(
         Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), true);
@@ -121,13 +123,13 @@ abstract class CrossRegionChannel extends AbstractChannel {
                 if (error != null) {
                   LOG.error("Failed to flush offsets to storage: ", error);
                   offsetWriter.cancelFlush();
-                  throw new RuntimeException("failed to flush offsets");
+                  throw new ConnectException("failed to flush offsets");
                 } else {
                   LOG.trace("Finished flushing offsets to storage");
                 }
               });
         } else {
-          throw new RuntimeException("Offset flush in progress");
+          throw new ConnectException("Offset flush in progress");
         }
         producer.commitTransaction();
       } catch (Exception e) {
@@ -179,6 +181,7 @@ abstract class CrossRegionChannel extends AbstractChannel {
   @Override
   void stop() {
     super.stop();
+    Utils.closeQuietly(admin, "topic admin");
     Utils.closeQuietly(offsetReader, "offset reader");
     Utils.closeQuietly(offsetStore::stop, "offset backing store");
   }

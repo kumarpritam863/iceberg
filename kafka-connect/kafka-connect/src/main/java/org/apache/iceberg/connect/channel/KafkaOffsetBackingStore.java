@@ -52,7 +52,6 @@ class KafkaOffsetBackingStore implements IcebergOffsetBackingStore {
   private static final Logger LOG = LoggerFactory.getLogger(KafkaOffsetBackingStore.class);
 
   private KafkaBasedLog<byte[], byte[]> offsetLog;
-  // Visible for testing
   private final Map<ByteBuffer, ByteBuffer> data = Maps.newHashMap();
   private final Map<String, Set<Map<String, Object>>> connectorPartitions = Maps.newHashMap();
   private Converter keyConverter;
