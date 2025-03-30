@@ -114,7 +114,7 @@ class Coordinator extends Channel {
   }
 
   @Override
-  protected boolean receive(Envelope envelope) {
+  boolean receive(Envelope envelope) {
     switch (envelope.event().payload().type()) {
       case DATA_WRITTEN:
         commitState.addResponse(envelope);

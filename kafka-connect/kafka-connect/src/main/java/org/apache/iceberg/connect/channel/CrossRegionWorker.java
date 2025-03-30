@@ -37,7 +37,7 @@ import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
-public class CrossRegionWorker extends CrossRegionChannel {
+class CrossRegionWorker extends CrossRegionChannel {
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
