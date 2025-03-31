@@ -24,6 +24,7 @@ public class CrossRegionCommitter extends AbstractCommitter {
 
   @Override
   AbstractChannel createWorker() {
-    return new CrossRegionWorker(config(), clientFactory(), new SinkWriter(catalog(), config()), context());
+    return new CrossRegionWorker(
+        config(), clientFactory(), new SinkWriter(catalog(), config()), context());
   }
 }
