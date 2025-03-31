@@ -24,6 +24,6 @@ public class CommitterImpl extends AbstractCommitter {
 
   @Override
   AbstractChannel createWorker() {
-    return new Worker(config, clientFactory, new SinkWriter(catalog, config), context);
+    return new Worker(config(), clientFactory(), new SinkWriter(catalog(), config()), context());
   }
 }

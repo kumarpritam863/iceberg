@@ -59,7 +59,7 @@ import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class Coordinator extends Channel {
+class Coordinator extends AbstractChannel {
 
   private static final Logger LOG = LoggerFactory.getLogger(Coordinator.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -82,7 +82,12 @@ class Coordinator extends Channel {
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
     // pass consumer group ID to which we commit low watermark offsets
-    super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
+    super(
+        ChannelType.COORDINATOR,
+        config.connectGroupId() + "-coord",
+        config,
+        clientFactory,
+        context);
 
     this.catalog = catalog;
     this.config = config;

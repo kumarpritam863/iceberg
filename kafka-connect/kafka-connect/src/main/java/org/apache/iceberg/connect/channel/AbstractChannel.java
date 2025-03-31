@@ -18,11 +18,14 @@
  */
 package org.apache.iceberg.connect.channel;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.events.AvroUtil;
@@ -34,8 +37,12 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
+import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,10 +53,16 @@ abstract class AbstractChannel {
   private final String connectGroupId;
 
   private final Consumer<byte[], byte[]> consumer;
+  private final Producer<byte[], byte[]> producer;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
+  private final SinkTaskContext context;
 
   AbstractChannel(
-      String consumerGroupId, IcebergSinkConfig config, KafkaClientFactory clientFactory) {
+      ChannelType channelType,
+      String consumerGroupId,
+      IcebergSinkConfig config,
+      KafkaClientFactory clientFactory,
+      SinkTaskContext context) {
     this.controlTopic = config.controlTopic();
     this.connectGroupId = config.connectGroupId();
     this.consumer =
@@ -60,6 +73,14 @@ abstract class AbstractChannel {
                 UUID.randomUUID().toString(),
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
                 "latest"));
+    this.producer =
+        channelType.equals(ChannelType.WORKER) || channelType.equals(ChannelType.COORDINATOR)
+            ? clientFactory.createProducer(
+                config.transactionalPrefix()
+                    + channelType.name().toLowerCase(Locale.ROOT)
+                    + config.transactionalSuffix())
+            : null;
+    this.context = context;
   }
 
   void send(Event event) {
@@ -70,7 +91,48 @@ abstract class AbstractChannel {
     send(events, ImmutableMap.of());
   }
 
-  void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {}
+  void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {
+    if (null == producer) {
+      throw new ConnectException("Attempting to write with only readable channel");
+    }
+    Map<TopicPartition, OffsetAndMetadata> offsetsToCommit = Maps.newHashMap();
+    sourceOffsets.forEach((k, v) -> offsetsToCommit.put(k, new OffsetAndMetadata(v.offset())));
+
+    List<ProducerRecord<byte[], byte[]>> recordList =
+        events.stream()
+            .map(
+                event -> {
+                  LOG.info("Sending event of type: {}", event.type().name());
+                  byte[] data = AvroUtil.encode(event);
+                  // key by producer ID to keep event order
+                  return new ProducerRecord<>(
+                      controlTopic,
+                      UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8),
+                      data);
+                })
+            .collect(Collectors.toList());
+
+    synchronized (producer) {
+      producer.beginTransaction();
+      try {
+        // NOTE: we shouldn't call get() on the future in a transactional context,
+        // see docs for org.apache.kafka.clients.producer.KafkaProducer
+        recordList.forEach(producer::send);
+        if (!sourceOffsets.isEmpty()) {
+          producer.sendOffsetsToTransaction(
+              offsetsToCommit, KafkaUtils.consumerGroupMetadata(context));
+        }
+        producer.commitTransaction();
+      } catch (Exception e) {
+        try {
+          producer.abortTransaction();
+        } catch (Exception ex) {
+          LOG.warn("Error aborting producer transaction", ex);
+        }
+        throw e;
+      }
+    }
+  }
 
   abstract boolean receive(Envelope envelope);
 
@@ -122,6 +184,9 @@ abstract class AbstractChannel {
 
   void stop() {
     LOG.info("Channel stopping");
+    if (null != producer) {
+      producer.close();
+    }
     consumer.close();
   }
 

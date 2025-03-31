@@ -44,10 +44,27 @@ abstract class AbstractCommitter implements Committer {
 
   private CoordinatorThread coordinatorThread;
   private AbstractChannel worker;
-  Catalog catalog;
-  IcebergSinkConfig config;
-  SinkTaskContext context;
-  KafkaClientFactory clientFactory;
+  private Catalog catalog;
+  private IcebergSinkConfig config;
+  private SinkTaskContext context;
+
+  public IcebergSinkConfig config() {
+    return config;
+  }
+
+  public SinkTaskContext context() {
+    return context;
+  }
+
+  public KafkaClientFactory clientFactory() {
+    return clientFactory;
+  }
+
+  public Catalog catalog() {
+    return catalog;
+  }
+
+  private KafkaClientFactory clientFactory;
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 

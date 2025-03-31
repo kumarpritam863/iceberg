@@ -36,7 +36,7 @@ import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
-class Worker extends Channel {
+class Worker extends AbstractChannel {
 
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
@@ -49,7 +49,7 @@ class Worker extends Channel {
       SinkTaskContext context) {
     // pass transient consumer group ID to which we never commit offsets
     super(
-        "worker",
+        ChannelType.WORKER,
         config.controlGroupIdPrefix() + UUID.randomUUID(),
         config,
         clientFactory,

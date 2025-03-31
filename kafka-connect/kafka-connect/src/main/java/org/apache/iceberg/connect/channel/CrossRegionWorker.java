@@ -18,15 +18,18 @@
  */
 package org.apache.iceberg.connect.channel;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.connect.data.SinkWriterResult;
+import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
@@ -34,30 +37,83 @@ import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.json.JsonConverter;
+import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
+import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
+import org.apache.kafka.connect.storage.Converter;
+import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
+import org.apache.kafka.connect.storage.OffsetStorageWriter;
+import org.apache.kafka.connect.util.TopicAdmin;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-class CrossRegionWorker extends CrossRegionChannel {
-  private final IcebergSinkConfig config;
+class CrossRegionWorker extends AbstractChannel {
+
+  private static final Logger LOG = LoggerFactory.getLogger(CrossRegionWorker.class);
+
+  private final String controlTopic;
+  private final Producer<byte[], byte[]> producer;
+  private final String producerId;
+  private final IcebergOffsetBackingStore offsetStore;
+  private final CloseableOffsetStorageReader offsetReader;
+  private final OffsetStorageWriter offsetWriter;
   private final SinkTaskContext context;
+  private final TopicAdmin admin;
   private final SinkWriter sinkWriter;
+  private final IcebergSinkConfig config;
 
   CrossRegionWorker(
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkWriter sinkWriter,
       SinkTaskContext context) {
-    // pass transient consumer group ID to which we never commit offsets
     super(
-        "worker",
+        ChannelType.CROSS_REGION_WORKER,
         config.controlGroupIdPrefix() + UUID.randomUUID(),
         config,
         clientFactory,
         context);
-
-    this.config = config;
+    this.controlTopic = config.controlTopic();
+    String transactionalId =
+        config.transactionalPrefix() + "cross-region-worker" + config.transactionalSuffix();
+    this.producerId = UUID.randomUUID().toString();
+    this.producer = clientFactory.createProducer(transactionalId);
+    Consumer<byte[], byte[]> consumer =
+        clientFactory.createConsumer(
+            "offset_committer" + UUID.randomUUID(),
+            Map.of(
+                ConsumerConfig.CLIENT_ID_CONFIG,
+                "cross-region-consumer_" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+                "earliest"));
+    admin = clientFactory.topicAdmin();
+    Converter keyConverter = new JsonConverter();
+    keyConverter.configure(
+        Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), true);
+    Converter valueConverter = new JsonConverter();
+    valueConverter.configure(
+        Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), false);
+    offsetStore =
+        KafkaOffsetBackingStore.readWriteStore(
+            config.offsetStorageTopic(), producer, consumer, admin, keyConverter);
+    offsetStore.configure(Map.of());
+    this.offsetReader =
+        new OffsetStorageReaderImpl(
+            offsetStore, config.connectorName(), keyConverter, valueConverter);
+    this.offsetWriter =
+        new OffsetStorageWriter(offsetStore, config.connectorName(), keyConverter, valueConverter);
     this.context = context;
     this.sinkWriter = sinkWriter;
+    this.config = config;
   }
 
   @Override
@@ -110,9 +166,80 @@ class CrossRegionWorker extends CrossRegionChannel {
   }
 
   @Override
-  void stop() {
-    super.stop();
-    sinkWriter.close();
+  void send(List<Event> events) {
+    List<ProducerRecord<byte[], byte[]>> recordList =
+        events.stream()
+            .map(
+                event -> {
+                  LOG.info("Sending event of type: {}", event.type().name());
+                  byte[] data = AvroUtil.encode(event);
+                  // key by producer ID to keep event order
+                  return new ProducerRecord<>(
+                      controlTopic, producerId.getBytes(StandardCharsets.UTF_8), data);
+                })
+            .collect(Collectors.toList());
+
+    synchronized (producer) {
+      producer.beginTransaction();
+      try {
+        // NOTE: we shouldn't call get() on the future in a transactional context,
+        // see docs for org.apache.kafka.clients.producer.KafkaProducer
+        recordList.forEach(producer::send);
+        if (offsetWriter.beginFlush()) {
+          offsetWriter.doFlush(
+              (error, result) -> {
+                if (error != null) {
+                  LOG.error("Failed to flush offsets to storage: ", error);
+                  offsetWriter.cancelFlush();
+                  throw new ConnectException("failed to flush offsets");
+                } else {
+                  LOG.trace("Finished flushing offsets to storage");
+                }
+              });
+        } else {
+          throw new ConnectException("Offset flush in progress");
+        }
+        producer.commitTransaction();
+      } catch (Exception e) {
+        try {
+          producer.abortTransaction();
+        } catch (Exception ex) {
+          LOG.warn("Error aborting producer transaction", ex);
+        }
+        throw e;
+      }
+    }
+  }
+
+  @Override
+  void seekToLastCommittedOffsets(Collection<TopicPartition> topicPartitions) {
+    Map<TopicPartition, Long> offsetsToBeCommitted =
+        topicPartitions.stream()
+            .collect(
+                Collectors.toMap(
+                    tp -> tp,
+                    tp -> {
+                      Map<String, Object> storedOffset =
+                          offsetReader.offset(Collections.singletonMap(tp.topic(), tp.partition()));
+                      if (null != storedOffset) {
+                        Long offset = (Long) storedOffset.get(tp.topic());
+                        return null != offset ? offset : -1L;
+                      } else {
+                        return -1L;
+                      }
+                    }));
+    KafkaUtils.seekToLastCommittedOffsets(context, offsetsToBeCommitted);
+  }
+
+  @Override
+  void recordOffset(Map<String, ?> partition, Map<String, ?> offset) {
+    offsetWriter.offset(partition, offset);
+  }
+
+  @Override
+  void start() {
+    super.start();
+    offsetStore.start();
   }
 
   @Override
@@ -124,5 +251,14 @@ class CrossRegionWorker extends CrossRegionChannel {
               Collections.singletonMap(sinkRecord.topic(), sinkRecord.kafkaPartition()),
               Collections.singletonMap(sinkRecord.topic(), sinkRecord.kafkaPartition()));
         });
+  }
+
+  @Override
+  void stop() {
+    super.stop();
+    sinkWriter.close();
+    Utils.closeQuietly(admin, "topic admin");
+    Utils.closeQuietly(offsetReader, "offset reader");
+    Utils.closeQuietly(offsetStore::stop, "offset backing store");
   }
 }
