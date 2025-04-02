@@ -52,6 +52,8 @@ import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
 import org.apache.kafka.connect.storage.Converter;
 import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
 import org.apache.kafka.connect.storage.OffsetStorageWriter;
+import org.apache.kafka.connect.util.ConnectorTaskId;
+import org.apache.kafka.connect.util.LoggingContext;
 import org.apache.kafka.connect.util.TopicAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,13 +65,14 @@ class CrossRegionWorker extends AbstractChannel {
   private final String controlTopic;
   private final Producer<byte[], byte[]> producer;
   private final String producerId;
-  private final IcebergOffsetBackingStore offsetStore;
+  private final IcebergOffsetBackingStore primaryOffsetStore, globalOffsetStore;
   private final CloseableOffsetStorageReader offsetReader;
   private final OffsetStorageWriter offsetWriter;
   private final SinkTaskContext context;
   private final TopicAdmin admin;
   private final SinkWriter sinkWriter;
   private final IcebergSinkConfig config;
+  private final SourceOffsetBackingStore sourceOffsetBackingStore;
 
   CrossRegionWorker(
       IcebergSinkConfig config,
@@ -102,9 +105,20 @@ class CrossRegionWorker extends AbstractChannel {
     Converter valueConverter = new JsonConverter();
     valueConverter.configure(
         Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false"), false);
+    if (config.isPrimaryOffsetStorageTopicSameAsGlobalOffsetStorageTopic() || "".equals(config.primaryOffsetStorageTopic())) {
+      KafkaOffsetBackingStore primaryOffsetStore = KafkaOffsetBackingStore.readWriteStore(config.primaryOffsetStorageTopic(), producer, consumer, admin, keyConverter);
+      sourceOffsetBackingStore = SourceOffsetBackingStore.withOnlyConnectorStore(() -> LoggingContext.forTask(new ConnectorTaskId(config.connectorName(), config.taskId())),
+              primaryOffsetStore,
+              config.primaryOffsetStorageTopic(),
+              admin);
+    } else {
+      KafkaOffsetBackingStore primaryOffsetStore = KafkaOffsetBackingStore.readWriteStore(config.primaryOffsetStorageTopic(), producer, consumer, admin, keyConverter), globalOffsetStore = KafkaOffsetBackingStore.readWriteStore(config.globalOffsetStorageTopic(), producer, consumer, admin, keyConverter);
+      sourceOffsetBackingStore = SourceOffsetBackingStore.withConnectorAndWorkerStores()
+    }
     offsetStore =
         KafkaOffsetBackingStore.readWriteStore(
-            config.offsetStorageTopic(), producer, consumer, admin, keyConverter);
+            !"".equalsIgnoreCase(config.primaryOffsetStorageTopic()) ? config.primaryOffsetStorageTopic() : config.globalOffsetStorageTopic(), producer, consumer, admin, keyConverter);
+    SourceOffsetBackingStore sourceOffsetBackingStore =
     offsetStore.configure(Map.of());
     this.offsetReader =
         new OffsetStorageReaderImpl(

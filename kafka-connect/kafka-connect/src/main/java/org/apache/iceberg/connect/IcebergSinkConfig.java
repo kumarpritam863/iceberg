@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -40,6 +41,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.DescribeClusterResult;
 import org.apache.kafka.clients.admin.DescribeConfigsResult;
 import org.apache.kafka.clients.admin.DescribeTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -262,6 +264,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         COMMITTER_IMPL_DEFAULT,
         Importance.HIGH,
         COMMITTER_IMPL_DOC);
+    configDef.define(
+            "task.id",
+            ConfigDef.Type.STRING,
+            "-1",
+            Importance.HIGH,
+            "task count");
     return configDef;
   }
 
@@ -274,8 +282,10 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> writeProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newHashMap();
   private final JsonConverter jsonConverter;
-  private String offsetStorageTopic;
+  private String primaryOffsetStorageTopic;
+  private String globalOffsetStorageTopic;
   private final Map<String, String> committerConfig;
+  private boolean isPrimaryOffsetStorageTopicSameAsGlobalOffsetStorageTopic = false;
 
   public IcebergSinkConfig(Map<String, String> originalProps) {
     super(CONFIG_DEF, overrideCommitterImplIfNeeded(originalProps));
@@ -291,33 +301,22 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.sourceKafkaProps = Maps.newHashMap(workerProperties);
     sourceKafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, "consumer.override."));
     if (enableCrossRegionSupport()) {
-      offsetStorageTopic = originalProps.getOrDefault(SOURCE_OFFSET_STORAGE_TOPIC, "");
+      primaryOffsetStorageTopic = originalProps.getOrDefault(SOURCE_OFFSET_STORAGE_TOPIC, "");
+      globalOffsetStorageTopic = workerProperties.get(SOURCE_OFFSET_STORAGE_TOPIC);
       LOG.info(
           "Cross region support enabled. Found offset storage topic from config {}",
-          offsetStorageTopic);
-      if (StringUtils.isBlank(offsetStorageTopic)) {
-        LOG.info(
-            "Obtained offset storage topic from job config was empty. Falling back to global storage topic.");
-        if (!workerProperties.containsKey(SOURCE_OFFSET_STORAGE_TOPIC)) {
-          LOG.error(
-              "To enable cross region support, a topic to store source offsets must be provided either through worker properties or through <{}>",
-              SOURCE_OFFSET_STORAGE_TOPIC);
-          throw new ConfigException(
-              "Source offset storage topic is required to enable cross region support");
+              primaryOffsetStorageTopic);
+      if (StringUtils.isNotBlank(primaryOffsetStorageTopic)) {
+        try {
+          if (!StringUtils.isBlank(originalProps.get(SOURCE_OFFSET_STORAGE_TOPIC))) {
+            LOG.info(
+                    "Attempting to validate/create topic only if topic is provided by user as connect internal topics are validated / created during connect startup");
+            validateOffsetStorageTopic(primaryOffsetStorageTopic, controlKafkaProps, workerProperties);
+          }
+        } catch (ConfigException configException) {
+          LOG.error("Failed to validate / create topic {}", primaryOffsetStorageTopic, configException);
+          throw configException;
         }
-        LOG.warn(
-            "Using connect offset internal topic as offset storage topic, make sure connect and iceberg internal topic is sharing the same brokers");
-        offsetStorageTopic = workerProperties.get(SOURCE_OFFSET_STORAGE_TOPIC);
-      }
-      try {
-        if (!StringUtils.isBlank(originalProps.get(SOURCE_OFFSET_STORAGE_TOPIC))) {
-          LOG.info(
-              "Attempting to validate/create topic only if topic is provided by user as connect internal topics are validated / created during connect startup");
-          validateOffsetStorageTopic(offsetStorageTopic, controlKafkaProps);
-        }
-      } catch (ConfigException configException) {
-        LOG.error("Failed to validate / create topic {}", offsetStorageTopic, configException);
-        throw configException;
       }
     }
 
@@ -339,17 +338,20 @@ public class IcebergSinkConfig extends AbstractConfig {
     validate();
   }
 
-  private void validateOffsetStorageTopic(String topic, Map<String, String> sourceKafkaAdminProps) {
-    try (Admin admin = Admin.create(Maps.newHashMap(sourceKafkaAdminProps))) {
-      if (topicExists(admin, topic)) {
-        LOG.error(
-            "Topic {} exist, validating for partition, replication_factor and compactness", topic);
-        validateTopicConfig(admin, topic);
+  private void validateOffsetStorageTopic(String topic, Map<String, String> sourceKafkaAdminProps, Map<String, String> workerProperties) {
+    try (Admin primaryAdmin = Admin.create(Maps.newHashMap(sourceKafkaAdminProps));
+         Admin globalAdmin = Admin.create(Maps.newHashMap(workerProperties))) {
+
+      if (topicExists(primaryAdmin, topic)) {
+        LOG.info("Topic {} exists. Validating partitions, replication factor, and compactness.", topic);
+        validateTopicConfig(primaryAdmin, globalAdmin, topic);
       } else {
         LOG.warn("Topic {} does not exist. Creating...", topic);
-        createCompactedTopic(admin, topic);
-        LOG.info("Topic {} created: ", topic);
+        createCompactedTopic(primaryAdmin, topic);
+        LOG.info("Topic {} created successfully.", topic);
       }
+    } catch (Exception e) {
+      LOG.error("Error while validating or creating topic {}.", topic, e);
     }
   }
 
@@ -358,7 +360,7 @@ public class IcebergSinkConfig extends AbstractConfig {
       return admin.listTopics().names().get().contains(topicName);
     } catch (InterruptedException | ExecutionException e) {
       throw new ConfigException(
-          String.format("Failed to check if the topic {%s} exists?", offsetStorageTopic), e);
+          String.format("Failed to check if the topic {%s} exists?", topicName), e);
     }
   }
 
@@ -366,15 +368,15 @@ public class IcebergSinkConfig extends AbstractConfig {
     return admin.describeCluster().nodes().get().size();
   }
 
-  private void validateTopicConfig(Admin admin, String topicName) {
+  private void validateTopicConfig(Admin primaryAdmin, Admin globalAdmin, String topicName) {
     DescribeTopicsResult describeTopicsResult =
-        admin.describeTopics(Collections.singleton(topicName));
+            primaryAdmin.describeTopics(Collections.singleton(topicName));
     TopicDescription topicDescription;
     try {
       topicDescription = describeTopicsResult.topicNameValues().get(topicName).get();
     } catch (InterruptedException | ExecutionException e) {
       throw new ConfigException(
-          String.format("Failed to obtain topic description for topic = {%s}", offsetStorageTopic),
+          String.format("Failed to obtain topic description for topic = {%s}", topicName),
           e);
     }
 
@@ -388,7 +390,15 @@ public class IcebergSinkConfig extends AbstractConfig {
     int actualRF = topicDescription.partitions().get(0).replicas().size();
     int brokerCount;
     try {
-      brokerCount = getBrokerCount(admin);
+      DescribeClusterResult primaryClusterInfo = primaryAdmin.describeCluster(), globalClusterInfo = globalAdmin.describeCluster();
+      Set<String> primaryBrokerUrls = primaryClusterInfo.nodes().get().stream()
+              .map(node -> node.host() + ":" + node.port())
+              .collect(Collectors.toSet());
+      Set<String> globalWorkerUrls = globalClusterInfo.nodes().get().stream()
+              .map(node -> node.host() + ":" + node.port())
+              .collect(Collectors.toSet());
+      isPrimaryOffsetStorageTopicSameAsGlobalOffsetStorageTopic = primaryOffsetStorageTopic.equalsIgnoreCase(globalOffsetStorageTopic) && globalWorkerUrls.retainAll(primaryBrokerUrls);
+      brokerCount = primaryClusterInfo.nodes().get().size();
     } catch (InterruptedException | ExecutionException e) {
       throw new ConfigException(
           "Failed to get the broker count, required for validating replication factor", e);
@@ -402,13 +412,13 @@ public class IcebergSinkConfig extends AbstractConfig {
 
     // 3. Check cleanup.policy = compact
     ConfigResource resource = new ConfigResource(ConfigResource.Type.TOPIC, topicName);
-    DescribeConfigsResult configsResult = admin.describeConfigs(Collections.singleton(resource));
+    DescribeConfigsResult configsResult = primaryAdmin.describeConfigs(Collections.singleton(resource));
     Config config;
     try {
       config = configsResult.all().get().get(resource);
     } catch (InterruptedException | ExecutionException e) {
       throw new ConfigException(
-          String.format("Failed to obtain the cleanup.policy for topic {%s}", offsetStorageTopic),
+          String.format("Failed to obtain the cleanup.policy for topic {%s}", topicName),
           e);
     }
 
@@ -439,11 +449,11 @@ public class IcebergSinkConfig extends AbstractConfig {
       admin.createTopics(Collections.singletonList(newTopic)).all().get();
     } catch (InterruptedException | ExecutionException e) {
       if (e.getCause() instanceof TopicExistsException) {
-        LOG.info("Topic {} already exist", offsetStorageTopic, e);
+        LOG.info("Topic {} already exist", topicName, e);
       } else {
         throw new ConfigException(
             String.format(
-                "Failed to create offset storage topic with name {%s}", offsetStorageTopic),
+                "Failed to create offset storage topic with name {%s}", topicName),
             e);
       }
     }
@@ -486,8 +496,20 @@ public class IcebergSinkConfig extends AbstractConfig {
     return getBoolean(ENABLE_CROSS_REGION_SUPPORT);
   }
 
-  public String offsetStorageTopic() {
-    return offsetStorageTopic;
+  public String primaryOffsetStorageTopic() {
+    return primaryOffsetStorageTopic;
+  }
+
+  public String globalOffsetStorageTopic() {
+    return globalOffsetStorageTopic;
+  }
+
+  public int taskId() {
+    return Integer.parseInt(getString("task.id"));
+  }
+
+  public boolean isPrimaryOffsetStorageTopicSameAsGlobalOffsetStorageTopic() {
+    return isPrimaryOffsetStorageTopicSameAsGlobalOffsetStorageTopic;
   }
 
   public String committerImpl() {
