@@ -160,13 +160,13 @@ class CrossRegionWorker extends AbstractChannel {
     Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
     events.add(readyEvent);
 
-    send(events);
+    send(events, results.sourceOffsets());
 
     return true;
   }
 
   @Override
-  void send(List<Event> events) {
+  void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {
     List<ProducerRecord<byte[], byte[]>> recordList =
         events.stream()
             .map(
@@ -197,7 +197,9 @@ class CrossRegionWorker extends AbstractChannel {
                 }
               });
         } else {
-          throw new ConnectException("Offset flush in progress");
+          if (!sourceOffsets.isEmpty()) {
+            throw new ConnectException("Offset flush in progress");
+          }
         }
         producer.commitTransaction();
       } catch (Exception e) {

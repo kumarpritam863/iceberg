@@ -83,8 +83,8 @@ abstract class AbstractChannel {
     this.context = context;
   }
 
-  void send(List<Event> events) {
-    send(events, ImmutableMap.of());
+  void send(Event event) {
+    send(ImmutableList.of(event), ImmutableMap.of());
   }
 
   void send(List<Event> events, Map<TopicPartition, Offset> sourceOffsets) {

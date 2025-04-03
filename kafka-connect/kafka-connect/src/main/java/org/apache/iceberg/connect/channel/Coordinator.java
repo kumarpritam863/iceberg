@@ -107,7 +107,7 @@ class Coordinator extends AbstractChannel {
       commitState.startNewCommit();
       Event event =
           new Event(config.connectGroupId(), new StartCommit(commitState.currentCommitId()));
-      send(List.of(event));
+      send(event);
       LOG.info("Commit {} initiated", commitState.currentCommitId());
     }
 
@@ -163,7 +163,7 @@ class Coordinator extends AbstractChannel {
         new Event(
             config.connectGroupId(),
             new CommitComplete(commitState.currentCommitId(), validThroughTs));
-    send(List.of(event));
+    send(event);
 
     LOG.info(
         "Commit {} complete, committed to {} table(s), valid-through {}",
@@ -264,7 +264,7 @@ class Coordinator extends AbstractChannel {
               config.connectGroupId(),
               new CommitToTable(
                   commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
-      send(List.of(event));
+      send(event);
 
       LOG.info(
           "Commit complete to table {}, snapshot {}, commit ID {}, valid-through {}",
