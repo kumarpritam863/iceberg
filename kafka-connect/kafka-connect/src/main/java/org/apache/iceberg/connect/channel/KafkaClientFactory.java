@@ -44,6 +44,7 @@ class KafkaClientFactory {
     Map<String, Object> producerProps = Maps.newHashMap(kafkaProps);
     producerProps.putIfAbsent(ProducerConfig.CLIENT_ID_CONFIG, UUID.randomUUID().toString());
     producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+    producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
     KafkaProducer<String, byte[]> result =
         new KafkaProducer<>(producerProps, new StringSerializer(), new ByteArraySerializer());
     result.initTransactions();

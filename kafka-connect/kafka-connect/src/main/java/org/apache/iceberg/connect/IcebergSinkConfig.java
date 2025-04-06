@@ -29,12 +29,12 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.IcebergBuild;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.base.Splitter;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.util.PropertyUtil;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
@@ -59,7 +59,7 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String CATALOG_PROP_PREFIX = "iceberg.catalog.";
   private static final String HADOOP_PROP_PREFIX = "iceberg.hadoop.";
-  private static final String KAFKA_PROP_PREFIX = "iceberg.kafka.";
+  public static final String CONNECTOR_CLIENT_CONSUMER_OVERRIDES_PREFIX = "consumer.override.";
   private static final String TABLE_PROP_PREFIX = "iceberg.table.";
   private static final String AUTO_CREATE_PROP_PREFIX = "iceberg.tables.auto-create-props.";
   private static final String WRITE_PROP_PREFIX = "iceberg.tables.write-props.";
@@ -86,7 +86,6 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
   private static final int COMMIT_TIMEOUT_MS_DEFAULT = 30_000;
   private static final String COMMIT_THREADS_PROP = "iceberg.control.commit.threads";
-  private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
   private static final String HADOOP_CONF_DIR_PROP = "iceberg.hadoop-conf-dir";
@@ -190,12 +189,6 @@ public class IcebergSinkConfig extends AbstractConfig {
         Importance.LOW,
         "Prefix of the control consumer group");
     configDef.define(
-        CONNECT_GROUP_ID_PROP,
-        ConfigDef.Type.STRING,
-        null,
-        Importance.LOW,
-        "Name of the Connect consumer group, should not be set under normal conditions");
-    configDef.define(
         COMMIT_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
         COMMIT_INTERVAL_MS_DEFAULT,
@@ -245,7 +238,9 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.hadoopProps = PropertyUtil.propertiesWithPrefix(originalProps, HADOOP_PROP_PREFIX);
 
     this.kafkaProps = Maps.newHashMap(loadWorkerProps());
-    kafkaProps.putAll(PropertyUtil.propertiesWithPrefix(originalProps, KAFKA_PROP_PREFIX));
+    kafkaProps.putAll(
+        PropertyUtil.propertiesWithPrefix(
+            originalProps, CONNECTOR_CLIENT_CONSUMER_OVERRIDES_PREFIX));
 
     this.autoCreateProps =
         PropertyUtil.propertiesWithPrefix(originalProps, AUTO_CREATE_PROP_PREFIX);
@@ -379,14 +374,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   public String connectGroupId() {
-    String result = getString(CONNECT_GROUP_ID_PROP);
-    if (result != null) {
-      return result;
-    }
-
-    String connectorName = connectorName();
-    Preconditions.checkNotNull(connectorName, "Connector name cannot be null");
-    return "connect-" + connectorName;
+    return kafkaProps.getOrDefault(ConsumerConfig.GROUP_ID_CONFIG, "connect-" + connectorName());
   }
 
   public int commitIntervalMs() {
@@ -471,7 +459,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     }
     LOG.info(
         "Worker properties not loaded, using only {}* properties for Kafka clients",
-        KAFKA_PROP_PREFIX);
+        CONNECTOR_CLIENT_CONSUMER_OVERRIDES_PREFIX);
     return ImmutableMap.of();
   }
 }
