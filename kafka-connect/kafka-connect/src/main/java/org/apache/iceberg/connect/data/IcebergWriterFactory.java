@@ -29,7 +29,6 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
-import org.apache.iceberg.exceptions.ForbiddenException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.types.Type;
@@ -129,7 +128,7 @@ class IcebergWriterFactory {
       Namespace namespace = Namespace.of(Arrays.copyOfRange(levels, 0, index + 1));
       try {
         ((SupportsNamespaces) catalog).createNamespace(namespace);
-      } catch (AlreadyExistsException | ForbiddenException ex) {
+      } catch (Exception ex) {
         // Ignoring the error as forcefully creating the namespace even if it exists
         // to avoid double namespaceExists() check.
       }

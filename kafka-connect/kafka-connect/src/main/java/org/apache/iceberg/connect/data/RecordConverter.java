@@ -206,50 +206,133 @@ class RecordConverter {
       int structFieldId,
       SchemaUpdate.Consumer schemaUpdateConsumer) {
     GenericRecord result = GenericRecord.create(schema);
-    struct
-        .schema()
-        .fields()
-        .forEach(
-            recordField -> {
-              NestedField tableField = lookupStructField(recordField.name(), schema, structFieldId);
-              if (tableField == null) {
-                // add the column if schema evolution is on, otherwise skip the value
-                if (schemaUpdateConsumer != null) {
-                  String parentFieldName =
-                      structFieldId < 0 ? null : tableSchema.findColumnName(structFieldId);
-                  Type type = SchemaUtils.toIcebergType(recordField.schema(), config);
-                  schemaUpdateConsumer.addColumn(parentFieldName, recordField.name(), type);
-                }
-              } else {
-                boolean hasSchemaUpdates = false;
-                if (schemaUpdateConsumer != null) {
-                  // update the type if needed and schema evolution is on
-                  PrimitiveType evolveDataType =
-                      SchemaUtils.needsDataTypeUpdate(tableField.type(), recordField.schema());
-                  if (evolveDataType != null) {
-                    String fieldName = tableSchema.findColumnName(tableField.fieldId());
-                    schemaUpdateConsumer.updateType(fieldName, evolveDataType);
-                    hasSchemaUpdates = true;
-                  }
-                  // make optional if needed and schema evolution is on
-                  if (tableField.isRequired() && recordField.schema().isOptional()) {
-                    String fieldName = tableSchema.findColumnName(tableField.fieldId());
-                    schemaUpdateConsumer.makeOptional(fieldName);
-                    hasSchemaUpdates = true;
-                  }
-                }
-                if (!hasSchemaUpdates) {
-                  result.setField(
-                      tableField.name(),
-                      convertValue(
-                          struct.get(recordField),
-                          tableField.type(),
-                          tableField.fieldId(),
-                          schemaUpdateConsumer));
-                }
+
+    // Get all fields from both schemas
+    Map<String, NestedField> icebergFields = getFieldMap(schema);
+    Map<String, org.apache.kafka.connect.data.Field> recordFields = Maps.newHashMap();
+    struct.schema().fields().forEach(f -> recordFields.put(f.name(), f));
+
+    // Process all fields present in the record
+    recordFields.forEach(
+        (fieldName, recordField) -> {
+          NestedField tableField = icebergFields.get(fieldName);
+
+          if (tableField == null) {
+            // Field exists in record but not in Iceberg - addition
+            if (schemaUpdateConsumer != null) {
+              String parentFieldName =
+                  structFieldId < 0 ? null : tableSchema.findColumnName(structFieldId);
+              Type type = SchemaUtils.toIcebergType(recordField.schema(), config);
+              schemaUpdateConsumer.addColumn(parentFieldName, fieldName, type);
+            }
+          } else {
+            // Field exists in both - check for changes
+            handleFieldChanges(tableField, recordField, struct, result, schemaUpdateConsumer);
+          }
+        });
+
+    // Process fields missing from record but present in Iceberg - potential deletions
+    if (schemaUpdateConsumer != null) {
+      icebergFields.forEach(
+          (fieldName, tableField) -> {
+            if (!recordFields.containsKey(fieldName) && tableField.isRequired()) {
+              // Field exists in Iceberg but not in record - mark optional
+              String fullFieldName = tableSchema.findColumnName(tableField.fieldId());
+              schemaUpdateConsumer.makeOptional(fullFieldName);
+
+              // Recursively handle nested structures
+              if (tableField.type().isNestedType()) {
+                handleNestedFieldRemoval(tableField, schemaUpdateConsumer);
               }
-            });
+            }
+          });
+    }
+
     return result;
+  }
+
+  private void handleFieldChanges(
+      NestedField tableField,
+      org.apache.kafka.connect.data.Field recordField,
+      Struct struct,
+      GenericRecord result,
+      SchemaUpdate.Consumer schemaUpdateConsumer) {
+
+    boolean hasSchemaUpdates = false;
+
+    if (schemaUpdateConsumer != null) {
+      // Check for type changes
+      PrimitiveType evolveDataType =
+          SchemaUtils.needsDataTypeUpdate(tableField.type(), recordField.schema());
+      if (evolveDataType != null) {
+        String fieldName = tableSchema.findColumnName(tableField.fieldId());
+        schemaUpdateConsumer.updateType(fieldName, evolveDataType);
+        hasSchemaUpdates = true;
+      }
+
+      // Check for optional/required changes
+      if (tableField.isRequired() && recordField.schema().isOptional()) {
+        String fieldName = tableSchema.findColumnName(tableField.fieldId());
+        schemaUpdateConsumer.makeOptional(fieldName);
+        hasSchemaUpdates = true;
+      }
+
+      // Handle nested structures recursively
+      if (tableField.type().isStructType()
+          && recordField.schema().type() == org.apache.kafka.connect.data.Schema.Type.STRUCT) {
+        Object value = struct.get(recordField);
+        if (value instanceof Struct) {
+          convertToStruct(
+              (Struct) value,
+              tableField.type().asStructType(),
+              tableField.fieldId(),
+              schemaUpdateConsumer);
+        }
+      }
+    }
+
+    if (!hasSchemaUpdates) {
+      result.setField(
+          tableField.name(),
+          convertValue(
+              struct.get(recordField),
+              tableField.type(),
+              tableField.fieldId(),
+              schemaUpdateConsumer));
+    }
+  }
+
+  private void handleNestedFieldRemoval(
+      NestedField field, SchemaUpdate.Consumer schemaUpdateConsumer) {
+    if (field.type().isStructType()) {
+      for (NestedField nestedField : field.type().asStructType().fields()) {
+        if (nestedField.isRequired()) {
+          String fullPath = tableSchema.findColumnName(nestedField.fieldId());
+          schemaUpdateConsumer.makeOptional(fullPath);
+        }
+        if (nestedField.type().isNestedType()) {
+          handleNestedFieldRemoval(nestedField, schemaUpdateConsumer);
+        }
+      }
+    } else if (field.type().isListType()) {
+      NestedField elementField = field.type().asListType().fields().get(0);
+      if (elementField.type().isNestedType()) {
+        handleNestedFieldRemoval(elementField, schemaUpdateConsumer);
+      }
+    } else if (field.type().isMapType()) {
+      NestedField valueField = field.type().asMapType().fields().get(1);
+      if (valueField.type().isNestedType()) {
+        handleNestedFieldRemoval(valueField, schemaUpdateConsumer);
+      }
+    }
+  }
+
+  private Map<String, NestedField> getFieldMap(StructType schema) {
+    Map<String, NestedField> fieldMap = Maps.newHashMap();
+    for (NestedField field : schema.fields()) {
+      fieldMap.put(field.name(), field);
+    }
+    return fieldMap;
   }
 
   private NestedField lookupStructField(String fieldName, StructType schema, int structFieldId) {

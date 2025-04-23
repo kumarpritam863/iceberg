@@ -41,6 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
@@ -879,6 +880,366 @@ public class RecordConverterTest {
 
     assertThat(updateMap.get("st.ii").type()).isInstanceOf(LongType.class);
     assertThat(updateMap.get("st.ff").type()).isInstanceOf(DoubleType.class);
+  }
+
+  @Test
+  public void testRootLevelFieldAddition() {
+    // Setup table with minimal schema
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(NestedField.required(1, "id", IntegerType.get()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with additional field
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("new_field", Schema.STRING_SCHEMA)
+                    .build())
+            .put("id", 1)
+            .put("new_field", "value");
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<AddColumn> additions = consumer.addColumns();
+    assertThat(additions).hasSize(1);
+    AddColumn addition = additions.iterator().next();
+    assertThat(addition.name()).isEqualTo("new_field");
+    assertThat(addition.type()).isInstanceOf(StringType.class);
+  }
+
+  @Test
+  public void testRootLevelFieldDeletion() {
+    // Setup table with full schema
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "id", IntegerType.get()),
+            NestedField.required(2, "name", StringType.get()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with missing field
+    Struct data =
+        new Struct(SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build()).put("id", 1);
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<String> optionalFields =
+        consumer.makeOptionals().stream()
+            .map(SchemaUpdate.MakeOptional::name)
+            .collect(Collectors.toList());
+    assertThat(optionalFields).containsExactly("name");
+  }
+
+  @Test
+  public void testNestedStructFieldAddition() {
+    // Setup table with nested schema
+    org.apache.iceberg.Schema nestedSchema =
+        new org.apache.iceberg.Schema(NestedField.required(2, "street", StringType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "id", IntegerType.get()),
+            NestedField.required(3, "address", nestedSchema.asStruct()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with additional nested field
+    Struct address =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("street", Schema.STRING_SCHEMA)
+                    .field("city", Schema.STRING_SCHEMA)
+                    .build())
+            .put("street", "Main St")
+            .put("city", "Metropolis");
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("address", address.schema())
+                    .build())
+            .put("id", 1)
+            .put("address", address);
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<AddColumn> additions = consumer.addColumns();
+    assertThat(additions).hasSize(1);
+    AddColumn addition = additions.iterator().next();
+    assertThat(addition.name()).isEqualTo("city");
+    assertThat(addition.parentName()).isEqualTo("address");
+    assertThat(addition.type()).isInstanceOf(StringType.class);
+  }
+
+  @Test
+  public void testNestedStructFieldDeletion() {
+    // Setup table with nested schema
+    org.apache.iceberg.Schema nestedSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(2, "street", StringType.get()),
+            NestedField.required(3, "city", StringType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "id", IntegerType.get()),
+            NestedField.required(4, "address", nestedSchema.asStruct()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with missing nested field
+    Struct address =
+        new Struct(SchemaBuilder.struct().field("street", Schema.STRING_SCHEMA).build())
+            .put("street", "Main St");
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("address", address.schema())
+                    .build())
+            .put("id", 1)
+            .put("address", address);
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<String> optionalFields =
+        consumer.makeOptionals().stream()
+            .map(SchemaUpdate.MakeOptional::name)
+            .collect(Collectors.toList());
+    assertThat(optionalFields).containsExactlyInAnyOrder("address.city");
+  }
+
+  @Test
+  public void testArrayElementFieldAddition() {
+    // Setup table with array of simple structs
+    org.apache.iceberg.Schema itemSchema =
+        new org.apache.iceberg.Schema(NestedField.required(2, "id", IntegerType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "items", ListType.ofRequired(3, itemSchema.asStruct())));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with additional field in array elements
+    Struct item =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("name", Schema.STRING_SCHEMA)
+                    .build())
+            .put("id", 1)
+            .put("name", "item1");
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct().field("items", SchemaBuilder.array(item.schema())).build())
+            .put("items", ImmutableList.of(item));
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<AddColumn> additions = consumer.addColumns();
+    assertThat(additions).hasSize(1);
+    AddColumn addition = additions.iterator().next();
+    assertThat(addition.name()).isEqualTo("name");
+    assertThat(addition.parentName()).isEqualTo("items.element");
+    assertThat(addition.type()).isInstanceOf(StringType.class);
+  }
+
+  @Test
+  public void testArrayElementFieldDeletion() {
+    // Setup table with array of structs
+    org.apache.iceberg.Schema itemSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(2, "id", IntegerType.get()),
+            NestedField.required(3, "name", StringType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "items", ListType.ofRequired(4, itemSchema.asStruct())));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with missing field in array elements
+    Struct item =
+        new Struct(SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build()).put("id", 1);
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct().field("items", SchemaBuilder.array(item.schema())).build())
+            .put("items", ImmutableList.of(item));
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<String> optionalFields =
+        consumer.makeOptionals().stream()
+            .map(SchemaUpdate.MakeOptional::name)
+            .collect(Collectors.toList());
+    assertThat(optionalFields).containsExactly("items.element.name");
+  }
+
+  @Test
+  public void testMapValueFieldAddition() {
+    // Setup table with map of simple structs
+    org.apache.iceberg.Schema valueSchema =
+        new org.apache.iceberg.Schema(NestedField.required(2, "id", IntegerType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(
+                1,
+                "properties",
+                MapType.ofRequired(3, 4, StringType.get(), valueSchema.asStruct())));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with additional field in map values
+    Struct property =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("value", Schema.STRING_SCHEMA)
+                    .build())
+            .put("id", 1)
+            .put("value", "high");
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("properties", SchemaBuilder.map(Schema.STRING_SCHEMA, property.schema()))
+                    .build())
+            .put("properties", ImmutableMap.of("priority", property));
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<AddColumn> additions = consumer.addColumns();
+    assertThat(additions).hasSize(1);
+    AddColumn addition = additions.iterator().next();
+    assertThat(addition.name()).isEqualTo("value");
+    assertThat(addition.parentName()).isEqualTo("properties.value");
+    assertThat(addition.type()).isInstanceOf(StringType.class);
+  }
+
+  @Test
+  public void testMapValueFieldDeletion() {
+    // Setup table with map of structs
+    org.apache.iceberg.Schema valueSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(2, "id", IntegerType.get()),
+            NestedField.required(3, "value", StringType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(
+                1,
+                "properties",
+                MapType.ofRequired(4, 5, StringType.get(), valueSchema.asStruct())));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with missing field in map values
+    Struct property =
+        new Struct(SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build()).put("id", 1);
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("properties", SchemaBuilder.map(Schema.STRING_SCHEMA, property.schema()))
+                    .build())
+            .put("properties", ImmutableMap.of("priority", property));
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    Collection<String> optionalFields =
+        consumer.makeOptionals().stream()
+            .map(SchemaUpdate.MakeOptional::name)
+            .collect(Collectors.toList());
+    assertThat(optionalFields).containsExactly("properties.value.value");
+  }
+
+  @Test
+  public void testMixedAdditionsAndDeletions() {
+    // Setup table with complex schema
+    org.apache.iceberg.Schema addressSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(2, "street", StringType.get()),
+            NestedField.required(3, "city", StringType.get()));
+    org.apache.iceberg.Schema tableSchema =
+        new org.apache.iceberg.Schema(
+            NestedField.required(1, "id", IntegerType.get()),
+            NestedField.required(4, "address", addressSchema.asStruct()),
+            NestedField.required(5, "old_field", StringType.get()));
+    Table table = mock(Table.class);
+    when(table.schema()).thenReturn(tableSchema);
+    RecordConverter converter = new RecordConverter(table, config);
+
+    // Create record with:
+    // - New root field
+    // - Deleted root field
+    // - New nested field
+    // - Deleted nested field
+    Struct address =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("street", Schema.STRING_SCHEMA)
+                    .field("zip", Schema.STRING_SCHEMA) // new field
+                    .build())
+            .put("street", "Main St")
+            .put("zip", "12345");
+
+    Struct data =
+        new Struct(
+                SchemaBuilder.struct()
+                    .field("id", Schema.INT32_SCHEMA)
+                    .field("address", address.schema())
+                    .field("new_field", Schema.STRING_SCHEMA) // new root field
+                    .build())
+            .put("id", 1)
+            .put("address", address)
+            .put("new_field", "value");
+
+    // Verify schema evolution
+    SchemaUpdate.Consumer consumer = new SchemaUpdate.Consumer();
+    converter.convert(data, consumer);
+
+    // Verify additions
+    Collection<AddColumn> additions = consumer.addColumns();
+    assertThat(additions).hasSize(2);
+
+    Map<String, AddColumn> additionMap =
+        additions.stream().collect(Collectors.toMap(AddColumn::name, Function.identity()));
+
+    assertThat(additionMap.get("new_field").type()).isInstanceOf(StringType.class);
+    assertThat(additionMap.get("zip").parentName()).isEqualTo("address");
+    assertThat(additionMap.get("zip").type()).isInstanceOf(StringType.class);
+
+    // Verify deletions
+    Collection<String> optionalFields =
+        consumer.makeOptionals().stream()
+            .map(SchemaUpdate.MakeOptional::name)
+            .collect(Collectors.toList());
+    assertThat(optionalFields).containsExactlyInAnyOrder("old_field", "address.city");
   }
 
   public static Map<String, Object> createMapData() {
