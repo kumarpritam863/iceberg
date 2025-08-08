@@ -120,9 +120,12 @@ public class CommitterImpl implements Committer {
       IcebergSinkConfig icebergSinkConfig,
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
-    initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
-    if (hasLeaderPartition(addedPartitions)) {
-      LOG.info("Committer received leader partition. Starting Coordinator.");
+    if (isInitialized.compareAndSet(false, true)) {
+      this.catalog = icebergCatalog;
+      this.config = icebergSinkConfig;
+      this.context = sinkTaskContext;
+      this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+      LOG.info("Starting coordinator on worker {}-{}", config.connectorName(), config.taskId());
       startCoordinator();
     }
   }
