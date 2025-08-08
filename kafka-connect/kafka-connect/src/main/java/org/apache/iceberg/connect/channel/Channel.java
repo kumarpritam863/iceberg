@@ -23,9 +23,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.events.AvroUtil;
+import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
@@ -52,7 +54,7 @@ abstract class Channel {
   private final SinkTaskContext context;
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
-  private final String producerId;
+  /*private final String producerId;*/
 
   Channel(
       String name,
@@ -66,10 +68,14 @@ abstract class Channel {
 
     String transactionalId = config.transactionalPrefix() + name + config.transactionalSuffix();
     this.producer = clientFactory.createProducer(transactionalId);
-    this.consumer = clientFactory.createConsumer(consumerGroupId);
+    if (name.equalsIgnoreCase("coordinator")) {
+      this.consumer = clientFactory.createConsumer(consumerGroupId);
+    } else {
+      this.consumer = null;
+    }
     this.admin = clientFactory.createAdmin();
 
-    this.producerId = UUID.randomUUID().toString();
+    /*this.producerId = UUID.randomUUID().toString();*/
   }
 
   protected void send(Event event) {
@@ -88,7 +94,9 @@ abstract class Channel {
                   LOG.info("Sending event of type: {}", event.type().name());
                   byte[] data = AvroUtil.encode(event);
                   // key by producer ID to keep event order
-                  return new ProducerRecord<>(controlTopic, producerId, data);
+                  DataWritten dataWritten = (DataWritten) event.payload();
+                  TableIdentifier tableIdentifier = dataWritten.tableReference().identifier();
+                  return new ProducerRecord<>(controlTopic, tableIdentifier.namespace() + "." + tableIdentifier.name(), data);
                 })
             .collect(Collectors.toList());
 
@@ -161,7 +169,9 @@ abstract class Channel {
   void stop() {
     LOG.info("Channel stopping");
     producer.close();
-    consumer.close();
+    if (null != consumer) {
+      consumer.close();
+    }
     admin.close();
   }
 }

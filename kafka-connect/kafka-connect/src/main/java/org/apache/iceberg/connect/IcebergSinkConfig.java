@@ -108,6 +108,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
   public static final ConfigDef CONFIG_DEF = newConfigDef();
+  private static final String MAX_RECORDS_PER_COMMIT = "iceberg.max-records-per-commit";
 
   public static String version() {
     return IcebergBuild.version();
@@ -235,6 +236,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        MAX_RECORDS_PER_COMMIT,
+        ConfigDef.Type.INT,
+        1000,
+        Importance.HIGH,
+        "max records workers will process in a single commit");
     return configDef;
   }
 
@@ -491,5 +498,9 @@ public class IcebergSinkConfig extends AbstractConfig {
         "Worker properties not loaded, using only {}* properties for Kafka clients",
         KAFKA_PROP_PREFIX);
     return ImmutableMap.of();
+  }
+
+  public int maxRecordsPerCommit() {
+    return getInt(MAX_RECORDS_PER_COMMIT);
   }
 }

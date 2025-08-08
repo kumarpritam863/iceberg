@@ -136,24 +136,18 @@ public class CommitterImpl implements Committer {
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
-    if (!isInitialized.get()) {
-      LOG.warn("Unexpected close() call without resource initialization");
-      return;
-    }
-    if (hasLeaderPartition(closedPartitions)) {
-      LOG.info(
-          "Committer {}-{} lost leader partition. Stopping Coordinator.",
-          config.connectorName(),
-          config.taskId());
-      stopCoordinator();
-    }
     LOG.info("Stopping worker {}-{}.", config.connectorName(), config.taskId());
     stopWorker();
-    LOG.info(
-        "Seeking to last committed offsets for worker {}-{}.",
-        config.connectorName(),
-        config.taskId());
-    KafkaUtils.seekToLastCommittedOffsets(context);
+
+    if (closedPartitions.isEmpty()) {
+      stopCoordinator();
+    } else {
+      LOG.info(
+              "Seeking to last committed offsets for worker {}-{}.",
+              config.connectorName(),
+              config.taskId());
+      KafkaUtils.seekToLastCommittedOffsets(context);
+    }
   }
 
   @Override
@@ -162,24 +156,24 @@ public class CommitterImpl implements Committer {
       startWorker();
       worker.save(sinkRecords);
     }
-    processControlEvents();
+    /*processControlEvents();*/
   }
 
-  private void processControlEvents() {
+/*  private void processControlEvents() {
     if (coordinatorThread != null && coordinatorThread.isTerminated()) {
       throw new NotRunningException("Coordinator unexpectedly terminated");
     }
     if (worker != null) {
       worker.process();
     }
-  }
+  }*/
 
   private void startWorker() {
     if (null == this.worker) {
       LOG.info("Starting commit worker");
       SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
-      worker.start();
+      /*worker.start();*/
     }
   }
 

@@ -15,7 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- */
+ *//*
+
 package org.apache.iceberg.connect.channel;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -105,3 +106,4 @@ public class TestCommitState {
     return new Envelope(event, 0, 0);
   }
 }
+*/

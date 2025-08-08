@@ -22,6 +22,8 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
@@ -40,8 +42,10 @@ import org.apache.kafka.connect.sink.SinkTaskContext;
 class Worker extends Channel {
 
   private final IcebergSinkConfig config;
-  private final SinkTaskContext context;
+  /*private final SinkTaskContext context;*/
   private final SinkWriter sinkWriter;
+  private final AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
+  private final AtomicInteger recordsProcessed = new AtomicInteger(0);
 
   Worker(
       IcebergSinkConfig config,
@@ -57,27 +61,27 @@ class Worker extends Channel {
         context);
 
     this.config = config;
-    this.context = context;
+    /*this.context = context;*/
     this.sinkWriter = sinkWriter;
   }
 
-  void process() {
+/*  void process() {
     consumeAvailable(Duration.ZERO);
-  }
+  }*/
 
   @Override
   protected boolean receive(Envelope envelope) {
-    Event event = envelope.event();
+    /*Event event = envelope.event();
     if (event.payload().type() != PayloadType.START_COMMIT) {
       return false;
-    }
+    }*/
 
     SinkWriterResult results = sinkWriter.completeWrite();
 
     // include all assigned topic partitions even if no messages were read
     // from a partition, as the coordinator will use that to determine
     // when all data for a commit has been received
-    List<TopicPartitionOffset> assignments =
+    /*List<TopicPartitionOffset> assignments =
         context.assignment().stream()
             .map(
                 tp -> {
@@ -88,9 +92,9 @@ class Worker extends Channel {
                   return new TopicPartitionOffset(
                       tp.topic(), tp.partition(), offset.offset(), offset.timestamp());
                 })
-            .collect(Collectors.toList());
+            .collect(Collectors.toList());*/
 
-    UUID commitId = ((StartCommit) event.payload()).commitId();
+    UUID commitId = UUID.randomUUID()/*((StartCommit) event.payload()).commitId()*/;
 
     List<Event> events =
         results.writerResults().stream()
@@ -106,11 +110,12 @@ class Worker extends Channel {
                             writeResult.deleteFiles())))
             .collect(Collectors.toList());
 
-    Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
-    events.add(readyEvent);
+    /*Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
+    events.add(readyEvent);*/
 
     send(events, results.sourceOffsets());
-
+    recordsProcessed.set(0);
+    startTime.set(System.currentTimeMillis());
     return true;
   }
 
@@ -122,5 +127,12 @@ class Worker extends Channel {
 
   void save(Collection<SinkRecord> sinkRecords) {
     sinkWriter.save(sinkRecords);
+    if (shouldCommit(sinkRecords.size())) {
+      receive(null);
+    }
+  }
+
+  boolean shouldCommit(int batchSize) {
+    return System.currentTimeMillis() - startTime.get() >= config.commitIntervalMs() || recordsProcessed.addAndGet(batchSize) >= config.maxRecordsPerCommit();
   }
 }
