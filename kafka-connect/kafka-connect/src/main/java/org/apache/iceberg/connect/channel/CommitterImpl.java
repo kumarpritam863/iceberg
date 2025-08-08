@@ -74,21 +74,6 @@ public class CommitterImpl implements Committer {
     }
   }
 
-  private boolean hasLeaderPartition(Collection<TopicPartition> currentAssignedPartitions) {
-    ConsumerGroupDescription groupDesc;
-    try (Admin admin = clientFactory.createAdmin()) {
-      groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
-    }
-    if (groupDesc.state() == ConsumerGroupState.STABLE) {
-      Collection<MemberDescription> members = groupDesc.members();
-      if (containsFirstPartition(members, currentAssignedPartitions)) {
-        membersWhenWorkerIsCoordinator = members;
-        return true;
-      }
-    }
-    return false;
-  }
-
   @VisibleForTesting
   boolean containsFirstPartition(
       Collection<MemberDescription> members, Collection<TopicPartition> partitions) {
