@@ -30,11 +30,9 @@ import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.connect.data.SinkWriterResult;
 import org.apache.iceberg.connect.events.AvroUtil;
-import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.TableReference;
-import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
@@ -77,22 +75,6 @@ class Worker extends Channel {
   public void commit() {
     SinkWriterResult results = sinkWriter.completeWrite();
 
-    // include all assigned topic partitions even if no messages were read
-    // from a partition, as the coordinator will use that to determine
-    // when all data for a commit has been received
-    List<TopicPartitionOffset> assignments =
-        context.assignment().stream()
-            .map(
-                tp -> {
-                  Offset offset = results.sourceOffsets().get(tp);
-                  if (offset == null) {
-                    offset = Offset.NULL_OFFSET;
-                  }
-                  return new TopicPartitionOffset(
-                      tp.topic(), tp.partition(), offset.offset(), offset.timestamp());
-                })
-            .collect(Collectors.toList());
-
     UUID commitId = UUID.randomUUID();
 
     List<Event> events =
@@ -109,8 +91,6 @@ class Worker extends Channel {
                             writeResult.deleteFiles())))
             .collect(Collectors.toList());
 
-    Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
-    events.add(readyEvent);
     send(events, results.sourceOffsets());
     lastCommitMs.set(System.currentTimeMillis());
     records.set(0);
@@ -142,7 +122,7 @@ class Worker extends Channel {
         events.stream()
             .map(
                 event -> {
-                  LOG.info("Sending event of type: {}", event.type().name());
+                  LOG.info("Worker {}-{} sending event of type: {}", config.connectorName(), config.taskId(), event.type().name());
                   byte[] data = AvroUtil.encode(event);
                   // key by producer ID to keep event order
                   return new ProducerRecord<>(config.controlTopic(), producerId.toString(), data);
@@ -160,11 +140,13 @@ class Worker extends Channel {
               offsetsToCommit, KafkaUtils.consumerGroupMetadata(context));
         }
         producer.commitTransaction();
+        LOG.info("Worker {}-{} written files metadata to control topic {}", config.connectorName(), config.taskId(), config.controlTopic());
       } catch (Exception e) {
+        LOG.error("An error occurred while producing to control topic on worker {}-{}", config.connectorName(), config.taskId(), e);
         try {
           producer.abortTransaction();
         } catch (Exception ex) {
-          LOG.warn("Error aborting producer transaction", ex);
+          LOG.warn("Error aborting producer transaction on worker {}-{}", config.connectorName(), config.taskId(), ex);
         }
         throw e;
       }

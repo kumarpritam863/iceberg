@@ -60,6 +60,7 @@ public class CommitterImpl implements Committer {
     this.config = icebergSinkConfig;
     this.context = sinkTaskContext;
     this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+    LOG.info("Committer {}-{} starting coordinator.", config.connectorName(), config.taskId());
     startCoordinator();
   }
 
@@ -99,7 +100,7 @@ public class CommitterImpl implements Committer {
 
   private void startWorker() {
     if (null == this.worker) {
-      LOG.info("Starting commit worker");
+      LOG.info("Starting commit worker on task = {}-{}", config.connectorName(), config.taskId());
       SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
     }
@@ -107,7 +108,7 @@ public class CommitterImpl implements Committer {
 
   private void startCoordinator() {
     if (null == this.coordinatorThread) {
-      LOG.info("Task elected leader, starting commit coordinator");
+      LOG.info("Starting commit coordinator on task = {}-{}", config.connectorName(), config.taskId());
       Coordinator coordinator = new Coordinator(catalog, config, clientFactory);
       coordinatorThread = new CoordinatorThread(coordinator);
       coordinatorThread.start();

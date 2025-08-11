@@ -108,6 +108,7 @@ class Coordinator extends Channel {
     commitState.addResponse(envelope);
     if (commitState.isCommitTimedOut()
         || commitState.bufferSize() >= config.coordinatorCommitBufferThreshold()) {
+      LOG.info("Either commit timeout or commit size reached for coordinator {}-{}. Starting commit.", config.connectorName(), config.taskId());
       commit();
     }
   }
@@ -117,7 +118,7 @@ class Coordinator extends Channel {
     try {
       doCommit();
     } catch (Exception e) {
-      LOG.warn("Commit failed, will try again next cycle", e);
+      LOG.warn("Commit failed for coordinator {}-{}, will try again next cycle", config.connectorName(), config.taskId(), e);
     } finally {
       commitState.endCurrentCommit();
     }
@@ -134,8 +135,13 @@ class Coordinator extends Channel {
         .run(entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson));
 
     // we should only get here if all tables committed successfully...
+    LOG.info("Coordinator {}-{} successfully committed to following tables = {}", config.connectorName(), config.taskId(), commitMap.keySet()
+            .stream()
+            .map(tableReference -> tableReference.identifier().namespace() + "." + tableReference.identifier().name())
+            .collect(Collectors.toList()));
     commitConsumerOffsets();
     commitState.clearResponses();
+    LOG.info("Coordinator {}-{} committed it's control offsets.", config.connectorName(), config.taskId());
   }
 
   private String offsetsJson() {
@@ -153,7 +159,7 @@ class Coordinator extends Channel {
     try {
       table = catalog.loadTable(tableIdentifier);
     } catch (NoSuchTableException e) {
-      LOG.warn("Table not found, skipping commit: {}", tableIdentifier, e);
+      LOG.warn("Table not found by coordinator = {}-{}, skipping commit: {}", config.connectorName(), config.taskId(), tableIdentifier, e);
       return;
     }
 
@@ -188,7 +194,7 @@ class Coordinator extends Channel {
             .collect(Collectors.toList());
 
     if (dataFiles.isEmpty() && deleteFiles.isEmpty()) {
-      LOG.info("Nothing to commit to table {}, skipping", tableIdentifier);
+      LOG.info("Coordinator {}-{} found nothing to commit to table {}, skipping", config.connectorName(), config.taskId(), tableIdentifier);
     } else {
       if (deleteFiles.isEmpty()) {
         AppendFiles appendOp = table.newAppend();
@@ -208,6 +214,7 @@ class Coordinator extends Channel {
         deleteFiles.forEach(deltaOp::addDeletes);
         deltaOp.commit();
       }
+      LOG.info("Coordinator {}-{} committed successfully.", config.connectorName(), config.taskId());
     }
   }
 
