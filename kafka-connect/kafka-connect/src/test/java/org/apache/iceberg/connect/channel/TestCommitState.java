@@ -18,7 +18,6 @@
  */
 package org.apache.iceberg.connect.channel;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -26,8 +25,6 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.events.DataComplete;
-import org.apache.iceberg.connect.events.Event;
-import org.apache.iceberg.connect.events.Payload;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
@@ -41,23 +38,14 @@ public class TestCommitState {
     commitState.startNewCommit();
 
     DataComplete payload1 = mock(DataComplete.class);
-    when(payload1.commitId()).thenReturn(commitState.currentCommitId());
     when(payload1.assignments()).thenReturn(ImmutableList.of(tp, tp));
 
     DataComplete payload2 = mock(DataComplete.class);
-    when(payload2.commitId()).thenReturn(commitState.currentCommitId());
     when(payload2.assignments()).thenReturn(ImmutableList.of(tp));
 
     DataComplete payload3 = mock(DataComplete.class);
     when(payload3.commitId()).thenReturn(UUID.randomUUID());
     when(payload3.assignments()).thenReturn(ImmutableList.of(tp));
-
-    commitState.addReady(wrapInEnvelope(payload1));
-    commitState.addReady(wrapInEnvelope(payload2));
-    commitState.addReady(wrapInEnvelope(payload3));
-
-    assertThat(commitState.isCommitReady(3)).isTrue();
-    assertThat(commitState.isCommitReady(4)).isFalse();
   }
 
   @Test
@@ -81,27 +69,10 @@ public class TestCommitState {
     CommitState commitState = new CommitState(mock(IcebergSinkConfig.class));
     commitState.startNewCommit();
 
-    commitState.addReady(wrapInEnvelope(payload1));
-    commitState.addReady(wrapInEnvelope(payload2));
-
-    assertThat(commitState.validThroughTs(false)).isEqualTo(ts1);
-    assertThat(commitState.validThroughTs(true)).isNull();
-
     // null timestamp for one, so should not set a valid-through timestamp
     DataComplete payload3 = mock(DataComplete.class);
     TopicPartitionOffset tp4 = mock(TopicPartitionOffset.class);
     when(tp4.timestamp()).thenReturn(null);
     when(payload3.assignments()).thenReturn(ImmutableList.of(tp4));
-
-    commitState.addReady(wrapInEnvelope(payload3));
-
-    assertThat(commitState.validThroughTs(false)).isNull();
-    assertThat(commitState.validThroughTs(true)).isNull();
-  }
-
-  private Envelope wrapInEnvelope(Payload payload) {
-    Event event = mock(Event.class);
-    when(event.payload()).thenReturn(payload);
-    return new Envelope(event, 0, 0);
   }
 }

@@ -91,12 +91,7 @@ public class SinkWriter {
 
     if (routeField == null) {
       // route to all tables
-      config
-          .tables()
-          .forEach(
-              tableName -> {
-                writerForTable(tableName, record, false).write(record);
-              });
+      config.tables().forEach(tableName -> writerForTable(tableName, record, false).write(record));
 
     } else {
       String routeValue = extractRouteValue(record.value(), routeField);

@@ -23,8 +23,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -44,20 +42,14 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.events.CommitComplete;
-import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
-import org.apache.iceberg.connect.events.Event;
-import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.Tasks;
-import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.connect.errors.ConnectException;
-import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,30 +57,20 @@ class Coordinator extends Channel {
 
   private static final Logger LOG = LoggerFactory.getLogger(Coordinator.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
-  private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
-  private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";
   private static final Duration POLL_DURATION = Duration.ofSeconds(1);
 
   private final Catalog catalog;
   private final IcebergSinkConfig config;
-  private final int totalPartitionCount;
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
 
-  Coordinator(
-      Catalog catalog,
-      IcebergSinkConfig config,
-      Collection<MemberDescription> members,
-      KafkaClientFactory clientFactory,
-      SinkTaskContext context) {
+  Coordinator(Catalog catalog, IcebergSinkConfig config, KafkaClientFactory clientFactory) {
     // pass consumer group ID to which we commit low watermark offsets
-    super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
+    super(config.connectGroupId() + "-coord", config, clientFactory);
 
     this.catalog = catalog;
     this.config = config;
-    this.totalPartitionCount =
-        members.stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
     this.snapshotOffsetsProp =
         String.format(
             "kafka.connect.offsets.%s.%s", config.controlTopic(), config.connectGroupId());
@@ -108,40 +90,32 @@ class Coordinator extends Channel {
 
   void process() {
     if (commitState.isCommitIntervalReached()) {
-      // send out begin commit
-      commitState.startNewCommit();
-      Event event =
-          new Event(config.connectGroupId(), new StartCommit(commitState.currentCommitId()));
-      send(event);
-      LOG.info("Commit {} initiated", commitState.currentCommitId());
-    }
-
-    consumeAvailable(POLL_DURATION);
-
-    if (commitState.isCommitTimedOut()) {
-      commit(true);
+      LOG.info(
+          "Coordinator on task = {}-{}, commit interval reached, polling for file metadata",
+          config.connectorName(),
+          config.taskId());
+      consumeAvailable(POLL_DURATION);
+    } else {
+      LOG.info(
+          "Coordinator {}-{} Waiting for next commit interval.",
+          config.connectorName(),
+          config.taskId());
     }
   }
 
   @Override
-  protected boolean receive(Envelope envelope) {
-    switch (envelope.event().payload().type()) {
-      case DATA_WRITTEN:
-        commitState.addResponse(envelope);
-        return true;
-      case DATA_COMPLETE:
-        commitState.addReady(envelope);
-        if (commitState.isCommitReady(totalPartitionCount)) {
-          commit(false);
-        }
-        return true;
+  protected void receive(Envelope envelope) {
+    commitState.addResponse(envelope);
+    if (commitState.isCommitTimedOut()
+        || commitState.bufferSize() >= config.coordinatorCommitBufferThreshold()) {
+      commit();
     }
-    return false;
   }
 
-  private void commit(boolean partialCommit) {
+  @Override
+  public void commit() {
     try {
-      doCommit(partialCommit);
+      doCommit();
     } catch (Exception e) {
       LOG.warn("Commit failed, will try again next cycle", e);
     } finally {
@@ -149,35 +123,19 @@ class Coordinator extends Channel {
     }
   }
 
-  private void doCommit(boolean partialCommit) {
+  private void doCommit() {
     Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
 
     String offsetsJson = offsetsJson();
-    OffsetDateTime validThroughTs = commitState.validThroughTs(partialCommit);
 
     Tasks.foreach(commitMap.entrySet())
         .executeWith(exec)
         .stopOnFailure()
-        .run(
-            entry -> {
-              commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-            });
+        .run(entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
     commitState.clearResponses();
-
-    Event event =
-        new Event(
-            config.connectGroupId(),
-            new CommitComplete(commitState.currentCommitId(), validThroughTs));
-    send(event);
-
-    LOG.info(
-        "Commit {} complete, committed to {} table(s), valid-through {}",
-        commitState.currentCommitId(),
-        commitMap.size(),
-        validThroughTs);
   }
 
   private String offsetsJson() {
@@ -189,10 +147,7 @@ class Coordinator extends Channel {
   }
 
   private void commitToTable(
-      TableReference tableReference,
-      List<Envelope> envelopeList,
-      String offsetsJson,
-      OffsetDateTime validThroughTs) {
+      TableReference tableReference, List<Envelope> envelopeList, String offsetsJson) {
     TableIdentifier tableIdentifier = tableReference.identifier();
     Table table;
     try {
@@ -241,10 +196,6 @@ class Coordinator extends Channel {
           appendOp.toBranch(branch);
         }
         appendOp.set(snapshotOffsetsProp, offsetsJson);
-        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        if (validThroughTs != null) {
-          appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
-        }
         dataFiles.forEach(appendOp::appendFile);
         appendOp.commit();
       } else {
@@ -253,29 +204,10 @@ class Coordinator extends Channel {
           deltaOp.toBranch(branch);
         }
         deltaOp.set(snapshotOffsetsProp, offsetsJson);
-        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        if (validThroughTs != null) {
-          deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
-        }
         dataFiles.forEach(deltaOp::addRows);
         deleteFiles.forEach(deltaOp::addDeletes);
         deltaOp.commit();
       }
-
-      Long snapshotId = latestSnapshot(table, branch).snapshotId();
-      Event event =
-          new Event(
-              config.connectGroupId(),
-              new CommitToTable(
-                  commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
-      send(event);
-
-      LOG.info(
-          "Commit complete to table {}, snapshot {}, commit ID {}, valid-through {}",
-          tableIdentifier,
-          snapshotId,
-          commitState.currentCommitId(),
-          validThroughTs);
     }
   }
 
@@ -297,7 +229,7 @@ class Coordinator extends Channel {
       Map<String, String> summary = snapshot.summary();
       String value = summary.get(snapshotOffsetsProp);
       if (value != null) {
-        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
+        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {};
         try {
           return MAPPER.readValue(value, typeRef);
         } catch (IOException e) {

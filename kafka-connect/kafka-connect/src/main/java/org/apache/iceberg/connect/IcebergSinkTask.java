@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
@@ -33,7 +34,6 @@ public class IcebergSinkTask extends SinkTask {
 
   private static final Logger LOG = LoggerFactory.getLogger(IcebergSinkTask.class);
 
-  private IcebergSinkConfig config;
   private Catalog catalog;
   private Committer committer;
 
@@ -44,14 +44,10 @@ public class IcebergSinkTask extends SinkTask {
 
   @Override
   public void start(Map<String, String> props) {
-    this.config = new IcebergSinkConfig(props);
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
     this.catalog = CatalogUtils.loadCatalog(config);
     this.committer = CommitterFactory.createCommitter(config);
-  }
-
-  @Override
-  public void open(Collection<TopicPartition> partitions) {
-    committer.open(catalog, config, context, partitions);
+    this.committer.open(catalog, config, context, List.of());
   }
 
   @Override
@@ -61,7 +57,7 @@ public class IcebergSinkTask extends SinkTask {
 
   private void close() {
     if (committer != null) {
-      committer.close(context.assignment());
+      committer.close(List.of());
       committer = null;
     }
 

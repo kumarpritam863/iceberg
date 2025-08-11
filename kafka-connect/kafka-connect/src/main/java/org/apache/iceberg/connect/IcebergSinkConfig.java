@@ -108,6 +108,10 @@ public class IcebergSinkConfig extends AbstractConfig {
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
   public static final ConfigDef CONFIG_DEF = newConfigDef();
+  private static final String COORDINATOR_COMMIT_BUFFER_THRESHOLD =
+      "iceberg.coordinator-commit-buffer-threshold";
+  private static final String WORKER_MAX_RECORDS_PER_COMMIT =
+      "iceberg.worker-max-records-per-commit";
 
   public static String version() {
     return IcebergBuild.version();
@@ -235,6 +239,18 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        WORKER_MAX_RECORDS_PER_COMMIT,
+        ConfigDef.Type.INT,
+        1000,
+        Importance.HIGH,
+        "Max number of records a worker will process before committing");
+    configDef.define(
+        COORDINATOR_COMMIT_BUFFER_THRESHOLD,
+        ConfigDef.Type.INT,
+        1000,
+        Importance.HIGH,
+        "Number of file metadata a coordinator will buffer before committing to iceberg");
     return configDef;
   }
 
@@ -353,6 +369,14 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public long keepAliveTimeoutInMs() {
     return getLong(COORDINATOR_EXECUTOR_KEEP_ALIVE_TIMEOUT_MS);
+  }
+
+  public int coordinatorCommitBufferThreshold() {
+    return getInt(COORDINATOR_COMMIT_BUFFER_THRESHOLD);
+  }
+
+  public int workerMaxRecordsPerCommit() {
+    return getInt(WORKER_MAX_RECORDS_PER_COMMIT);
   }
 
   public TableSinkConfig tableConfig(String tableName) {

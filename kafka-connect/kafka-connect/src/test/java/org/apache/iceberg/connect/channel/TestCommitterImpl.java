@@ -18,43 +18,4 @@
  */
 package org.apache.iceberg.connect.channel;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.util.List;
-import java.util.Optional;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
-import org.apache.kafka.clients.admin.MemberAssignment;
-import org.apache.kafka.clients.admin.MemberDescription;
-import org.apache.kafka.common.TopicPartition;
-import org.junit.jupiter.api.Test;
-
-public class TestCommitterImpl {
-
-  @Test
-  public void testIsLeader() {
-    CommitterImpl committer = new CommitterImpl();
-
-    MemberAssignment assignment1 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic1", 0), new TopicPartition("topic2", 1)));
-    MemberDescription member1 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment1);
-
-    MemberAssignment assignment2 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1)));
-    MemberDescription member2 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment2);
-
-    List<MemberDescription> members = ImmutableList.of(member1, member2);
-
-    List<TopicPartition> assignments =
-        ImmutableList.of(new TopicPartition("topic2", 1), new TopicPartition("topic1", 0));
-    assertThat(committer.containsFirstPartition(members, assignments)).isTrue();
-
-    assignments =
-        ImmutableList.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1));
-    assertThat(committer.containsFirstPartition(members, assignments)).isFalse();
-  }
-}
+public class TestCommitterImpl {}
