@@ -42,7 +42,6 @@ import org.apache.iceberg.inmemory.InMemoryCatalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.types.Types;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.AfterEach;
@@ -196,11 +195,11 @@ public class TestSinkWriter {
             100L,
             now.toEpochMilli(),
             TimestampType.LOG_APPEND_TIME);
-    sinkWriter.save(ImmutableList.of(rec));
+    sinkWriter.save(rec);
 
     SinkWriterResult result = sinkWriter.completeWrite();
 
-    Offset offset = result.sourceOffsets().get(new TopicPartition("topic", 1));
+    Offset offset = result.sourceOffset();
     assertThat(offset).isNotNull();
     assertThat(offset.offset()).isEqualTo(101L); // should be 1 more than current offset
     assertThat(offset.timestamp()).isEqualTo(now.atOffset(ZoneOffset.UTC));

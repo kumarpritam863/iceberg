@@ -72,15 +72,12 @@ public class TestWorker extends ChannelTestBase {
               ImmutableList.of(),
               StructType.of());
 
-      Map<TopicPartition, Offset> offsets =
-          ImmutableMap.of(topicPartition, new Offset(1L, EventTestUtil.now()));
-
       SinkWriterResult sinkWriterResult =
-          new SinkWriterResult(ImmutableList.of(writeResult), offsets);
+          new SinkWriterResult(ImmutableList.of(writeResult), new Offset(1L, EventTestUtil.now()));
       SinkWriter sinkWriter = mock(SinkWriter.class);
       when(sinkWriter.completeWrite()).thenReturn(sinkWriterResult);
 
-      Worker worker = new Worker(config, clientFactory, sinkWriter, context);
+      Worker worker = new Worker(catalog, config, clientFactory, context);
       worker.start();
 
       // init consumer after subscribe()

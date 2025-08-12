@@ -24,7 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
@@ -121,6 +120,7 @@ public class CommitterImpl implements Committer {
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
+    startWorker();
     if (hasLeaderPartition(addedPartitions)) {
       LOG.info("Committer received leader partition. Starting Coordinator.");
       startCoordinator();
@@ -136,23 +136,22 @@ public class CommitterImpl implements Committer {
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
-    // Will try closing worker if started in every case to avoid duplicates.
-    stopWorker();
-
     // In case close is called by connect framework without open call, which should not happen.
     if (!isInitialized.get()) {
       LOG.warn("Close unexpectedly called without partition assignment");
       return;
     }
 
-    // Connect never calls close on a task with empty partition so empty partition means the task
-    // has stopped as we manually call close with empty partition in that case. Stopping coordinator
-    // if it was started on this task.
     if (closedPartitions.isEmpty()) {
-      LOG.info("Task stopped. Trying closing coordinator");
-      stopCoordinator();
+      handleTaskStopped();
       return;
     }
+
+    handlePartitionClosed(closedPartitions);
+  }
+
+  private void handlePartitionClosed(Collection<TopicPartition> closedPartitions) {
+    closeWorkerForPartition(closedPartitions);
 
     if (hasLeaderPartition(closedPartitions)) {
       LOG.info(
@@ -161,18 +160,23 @@ public class CommitterImpl implements Committer {
           config.taskId());
       stopCoordinator();
     }
+  }
 
-    LOG.info(
-        "Seeking to last committed offsets for worker {}-{}.",
-        config.connectorName(),
-        config.taskId());
-    KafkaUtils.seekToLastCommittedOffsets(context);
+  private void handleTaskStopped() {
+    LOG.info("Task stopped. Trying closing coordinator");
+    stopWorker();
+    stopCoordinator();
+  }
+
+  private void closeWorkerForPartition(Collection<TopicPartition> closedPartitions) {
+    if (null != worker) {
+      closedPartitions.forEach(closedPartition -> worker.close(closedPartition));
+    }
   }
 
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
-      startWorker();
       worker.save(sinkRecords);
     }
     processControlEvents();
@@ -193,8 +197,7 @@ public class CommitterImpl implements Committer {
   private void startWorker() {
     if (null == this.worker) {
       LOG.info("Starting commit worker {}-{}", config.connectorName(), config.taskId());
-      SinkWriter sinkWriter = new SinkWriter(catalog, config);
-      worker = new Worker(config, clientFactory, sinkWriter, context);
+      worker = new Worker(catalog, config, clientFactory, context);
       worker.start();
     }
   }

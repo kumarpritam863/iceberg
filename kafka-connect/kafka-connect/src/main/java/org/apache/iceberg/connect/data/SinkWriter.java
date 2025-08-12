@@ -21,30 +21,29 @@ package org.apache.iceberg.connect.data;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 public class SinkWriter {
   private final IcebergSinkConfig config;
   private final IcebergWriterFactory writerFactory;
   private final Map<String, RecordWriter> writers;
-  private final Map<TopicPartition, Offset> sourceOffsets;
+  private final AtomicReference<Offset> sourceOffset;
 
   public SinkWriter(Catalog catalog, IcebergSinkConfig config) {
     this.config = config;
     this.writerFactory = new IcebergWriterFactory(catalog, config);
     this.writers = Maps.newHashMap();
-    this.sourceOffsets = Maps.newHashMap();
+    this.sourceOffset = new AtomicReference<>(null);
   }
 
   public void close() {
@@ -56,28 +55,21 @@ public class SinkWriter {
         writers.values().stream()
             .flatMap(writer -> writer.complete().stream())
             .collect(Collectors.toList());
-    Map<TopicPartition, Offset> offsets = Maps.newHashMap(sourceOffsets);
+    Offset lastReadOffset = sourceOffset.getAndSet(null);
 
     writers.clear();
-    sourceOffsets.clear();
 
-    return new SinkWriterResult(writerResults, offsets);
+    return new SinkWriterResult(writerResults, lastReadOffset);
   }
 
-  public void save(Collection<SinkRecord> sinkRecords) {
-    sinkRecords.forEach(this::save);
-  }
-
-  private void save(SinkRecord record) {
+  public void save(SinkRecord record) {
     // the consumer stores the offsets that corresponds to the next record to consume,
     // so increment the record offset by one
     OffsetDateTime timestamp =
         record.timestamp() == null
             ? null
             : OffsetDateTime.ofInstant(Instant.ofEpochMilli(record.timestamp()), ZoneOffset.UTC);
-    sourceOffsets.put(
-        new TopicPartition(record.topic(), record.kafkaPartition()),
-        new Offset(record.kafkaOffset() + 1, timestamp));
+    sourceOffset.set(new Offset(record.kafkaOffset() + 1, timestamp));
 
     if (config.dynamicTablesEnabled()) {
       routeRecordDynamically(record);

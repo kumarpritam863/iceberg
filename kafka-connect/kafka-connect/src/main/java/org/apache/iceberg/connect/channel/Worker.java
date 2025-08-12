@@ -21,9 +21,13 @@ package org.apache.iceberg.connect.channel;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.apache.commons.compress.utils.Lists;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.data.IcebergWriterResult;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.connect.data.SinkWriterResult;
@@ -34,6 +38,8 @@ import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
@@ -41,12 +47,13 @@ class Worker extends Channel {
 
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
-  private final SinkWriter sinkWriter;
+  private final Map<TopicPartition, SinkWriter> sinkWriters;
+  private final Catalog catalog;
 
   Worker(
+      Catalog catalog,
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
-      SinkWriter sinkWriter,
       SinkTaskContext context) {
     // pass transient consumer group ID to which we never commit offsets
     super(
@@ -56,9 +63,10 @@ class Worker extends Channel {
         clientFactory,
         context);
 
+    this.catalog = catalog;
     this.config = config;
     this.context = context;
-    this.sinkWriter = sinkWriter;
+    this.sinkWriters = Maps.newHashMap();
   }
 
   void process() {
@@ -72,7 +80,7 @@ class Worker extends Channel {
       return false;
     }
 
-    SinkWriterResult results = sinkWriter.completeWrite();
+    WorkerWriteResult results = completeWrite();
 
     // include all assigned topic partitions even if no messages were read
     // from a partition, as the coordinator will use that to determine
@@ -114,13 +122,57 @@ class Worker extends Channel {
     return true;
   }
 
+  private WorkerWriteResult completeWrite() {
+    List<IcebergWriterResult> writerResults = Lists.newArrayList();
+    Map<TopicPartition, Offset> sourceOffsets = Maps.newHashMap();
+    for (Map.Entry<TopicPartition, SinkWriter> entry : sinkWriters.entrySet()) {
+      SinkWriterResult result = entry.getValue().completeWrite();
+      writerResults.addAll(result.writerResults());
+      sourceOffsets.put(entry.getKey(), result.sourceOffset());
+    }
+    return new WorkerWriteResult(writerResults, sourceOffsets);
+  }
+
   @Override
   void stop() {
     super.stop();
-    sinkWriter.close();
+    sinkWriters.values().forEach(SinkWriter::close);
   }
 
   void save(Collection<SinkRecord> sinkRecords) {
-    sinkWriter.save(sinkRecords);
+    for (SinkRecord sinkRecord : sinkRecords) {
+      SinkWriter writer =
+          sinkWriters.computeIfAbsent(
+              new TopicPartition(sinkRecord.topic(), sinkRecord.kafkaPartition()),
+              tp -> new SinkWriter(catalog, config));
+      writer.save(sinkRecord);
+    }
+  }
+
+  static class WorkerWriteResult {
+    private final List<IcebergWriterResult> writerResults;
+
+    public WorkerWriteResult(
+        List<IcebergWriterResult> writerResults, Map<TopicPartition, Offset> sourceOffsets) {
+      this.writerResults = writerResults;
+      this.sourceOffsets = sourceOffsets;
+    }
+
+    public List<IcebergWriterResult> writerResults() {
+      return writerResults;
+    }
+
+    public Map<TopicPartition, Offset> sourceOffsets() {
+      return sourceOffsets;
+    }
+
+    private final Map<TopicPartition, Offset> sourceOffsets;
+  }
+
+  public void close(TopicPartition topicPartition) {
+    SinkWriter sinkWriter = sinkWriters.remove(topicPartition);
+    if (null != sinkWriter) {
+      sinkWriter.close();
+    }
   }
 }
