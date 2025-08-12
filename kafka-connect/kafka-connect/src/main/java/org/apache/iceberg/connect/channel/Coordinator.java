@@ -46,6 +46,7 @@ import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.Tasks;
@@ -63,7 +64,7 @@ class Coordinator extends Channel {
   private final IcebergSinkConfig config;
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
-  private final CommitState commitState;
+  private final List<Envelope> commitBuffer = Lists.newArrayList();
 
   Coordinator(Catalog catalog, IcebergSinkConfig config, KafkaClientFactory clientFactory) {
     // pass consumer group ID to which we commit low watermark offsets
@@ -85,29 +86,20 @@ class Coordinator extends Channel {
                 .setDaemon(true)
                 .setNameFormat("iceberg-committer" + "-%d")
                 .build());
-    this.commitState = new CommitState(config);
   }
 
   void process() {
-    if (commitState.isCommitIntervalReached()) {
-      LOG.info(
-          "Coordinator on task = {}-{}, commit interval reached, polling for file metadata",
-          config.connectorName(),
-          config.taskId());
-      consumeAvailable(POLL_DURATION);
-    } else {
-      LOG.info(
-          "Coordinator {}-{} Waiting for next commit interval.",
-          config.connectorName(),
-          config.taskId());
-    }
+    LOG.info(
+            "Coordinator on task = {}-{}, polling for file metadata",
+            config.connectorName(),
+            config.taskId());
+    consumeAvailable(POLL_DURATION);
   }
 
   @Override
   protected void receive(Envelope envelope) {
-    commitState.addResponse(envelope);
-    if (commitState.isCommitTimedOut()
-        || commitState.bufferSize() >= config.coordinatorCommitBufferThreshold()) {
+    commitBuffer.add(envelope);
+    if (commitBuffer.size() >= config.coordinatorCommitBufferThreshold()) {
       LOG.info("Either commit timeout or commit size reached for coordinator {}-{}. Starting commit.", config.connectorName(), config.taskId());
       commit();
     }
@@ -119,13 +111,14 @@ class Coordinator extends Channel {
       doCommit();
     } catch (Exception e) {
       LOG.warn("Commit failed for coordinator {}-{}, will try again next cycle", config.connectorName(), config.taskId(), e);
-    } finally {
-      commitState.endCurrentCommit();
     }
   }
 
   private void doCommit() {
-    Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
+    Map<TableReference, List<Envelope>> commitMap = commitBuffer.stream()
+            .collect(
+                    Collectors.groupingBy(
+                            envelope -> ((DataWritten) envelope.event().payload()).tableReference()));
 
     String offsetsJson = offsetsJson();
 
@@ -140,7 +133,7 @@ class Coordinator extends Channel {
             .map(tableReference -> tableReference.identifier().namespace() + "." + tableReference.identifier().name())
             .collect(Collectors.toList()));
     commitConsumerOffsets();
-    commitState.clearResponses();
+    commitBuffer.clear();
     LOG.info("Coordinator {}-{} committed it's control offsets.", config.connectorName(), config.taskId());
   }
 
