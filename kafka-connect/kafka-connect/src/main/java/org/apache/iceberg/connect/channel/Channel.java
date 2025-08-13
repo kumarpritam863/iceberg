@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.Offset;
@@ -37,6 +38,8 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +56,20 @@ abstract class Channel {
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
+  private final ChannelRole channelRole;
+  private final AtomicInteger workerProduceAttempt = new AtomicInteger();
+  private final int maxWorkerProduceAttempt;
+  private long workerCurrentBackoffMs;
+  private final double workerBackoffMultiplier;
+  private final long workerBaseBackoffMs;
+  private final long workerMaxBackoffMs;
+  private final List<String> workerRetriableExceptions;
+  private final String jobName;
+
+  private enum ChannelRole {
+    WORKER,
+    COORDINATOR
+  }
 
   Channel(
       String name,
@@ -60,6 +77,13 @@ abstract class Channel {
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
+    this.jobName = config.connectorName() + "-" + config.taskId();
+    this.channelRole = ChannelRole.valueOf(name);
+    this.maxWorkerProduceAttempt = config.workerMaxProduceAttempt();
+    this.workerCurrentBackoffMs = this.workerBaseBackoffMs = config.workerBaseBackoffMs();
+    this.workerBackoffMultiplier = config.workerBackoffMultiplier();
+    this.workerMaxBackoffMs = config.workerMaxBackoffMs();
+    this.workerRetriableExceptions = config.workerRetriableExceptions();
     this.controlTopic = config.controlTopic();
     this.connectGroupId = config.connectGroupId();
     this.context = context;
@@ -103,15 +127,53 @@ abstract class Channel {
               offsetsToCommit, KafkaUtils.consumerGroupMetadata(context));
         }
         producer.commitTransaction();
+        if (channelRole.equals(ChannelRole.WORKER)) {
+          workerProduceAttempt.set(0);
+          workerCurrentBackoffMs = workerBaseBackoffMs;
+        }
       } catch (Exception e) {
-        try {
-          producer.abortTransaction();
-        } catch (Exception ex) {
-          LOG.warn("Error aborting producer transaction", ex);
+        if (channelRole.equals(ChannelRole.WORKER) && isRetriableException(e)) {
+          if (workerProduceAttempt.incrementAndGet() > maxWorkerProduceAttempt) {
+            throw new ConnectException(
+                String.format(
+                    "Worker %s exhausted all attempts to produce control event.", jobName),
+                e);
+          }
+
+          // Apply exponential backoff
+          context.timeout(workerCurrentBackoffMs);
+          LOG.warn(
+              "Worker {} send failed. Retrying in {} ms (attempt {}/{}).",
+              jobName,
+              workerCurrentBackoffMs,
+              workerProduceAttempt.get(),
+              maxWorkerProduceAttempt);
+
+          // Increase backoff for next time
+          workerCurrentBackoffMs =
+              Math.min(
+                  (long) (workerCurrentBackoffMs * workerBackoffMultiplier), workerMaxBackoffMs);
+
+          throw new RetriableException(
+              String.format("Worker %s will retry in next attempt.", jobName), e);
         }
         throw e;
       }
     }
+  }
+
+  private boolean isRetriableException(Throwable e) {
+    for (String className : workerRetriableExceptions) {
+      try {
+        Class<?> clazz = Class.forName(className);
+        if (clazz.isAssignableFrom(e.getClass())) {
+          return true;
+        }
+      } catch (ClassNotFoundException cnfe) {
+        LOG.warn("Configured retriable exception class not found: {}", className);
+      }
+    }
+    return false;
   }
 
   protected abstract boolean receive(Envelope envelope);

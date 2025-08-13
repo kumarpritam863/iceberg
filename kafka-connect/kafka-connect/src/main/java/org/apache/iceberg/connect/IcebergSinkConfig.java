@@ -102,6 +102,12 @@ public class IcebergSinkConfig extends AbstractConfig {
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts
 
+  public static final String WORKER_MAX_PRODUCE_ATTEMPT = "iceberg.worker-max-produce-attempt";
+  public static final String WORKER_BASE_BACKOFF_MS = "iceberg.worker-base-backoff-ms";
+  private static final String WORKER_BACKOFF_MULTIPLIER = "iceberg.worker-backoff-multiplier";
+  private static final String WORKER_MAX_BACKOFF_MS = "iceberg.worker-max-backoff-ms";
+  private static final String WORKER_RETRIABLE_EXCEPTIONS = "iceberg.worker-retriable-exceptions";
+
   private static final String COORDINATOR_EXECUTOR_KEEP_ALIVE_TIMEOUT_MS =
       "iceberg.coordinator-executor-keep-alive-timeout-ms";
 
@@ -235,6 +241,36 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        WORKER_MAX_PRODUCE_ATTEMPT,
+        ConfigDef.Type.INT,
+        5,
+        Importance.LOW,
+        "Maximum attempt a worker will make for producing control events and it's offset");
+    configDef.define(
+        WORKER_BASE_BACKOFF_MS,
+        ConfigDef.Type.LONG,
+        5000,
+        Importance.LOW,
+        "Base backoff ms for a worker after which worker will retry producing control events and it's offsets");
+    configDef.define(
+        WORKER_BACKOFF_MULTIPLIER,
+        ConfigDef.Type.DOUBLE,
+        2.0,
+        Importance.LOW,
+        "Back off multiplier for worker");
+    configDef.define(
+        WORKER_MAX_BACKOFF_MS,
+        ConfigDef.Type.LONG,
+        3 * 60 * 1000L,
+        Importance.LOW,
+        "Maximum backoff for a worker for producing it's events and source offsets");
+    configDef.define(
+        WORKER_RETRIABLE_EXCEPTIONS,
+        ConfigDef.Type.LIST,
+        List.of(),
+        Importance.LOW,
+        "List of retriable exceptions fpr worker");
     return configDef;
   }
 
@@ -288,6 +324,26 @@ public class IcebergSinkConfig extends AbstractConfig {
     if (!condition) {
       throw new ConfigException(msg);
     }
+  }
+
+  public long workerBaseBackoffMs() {
+    return getLong(WORKER_BASE_BACKOFF_MS);
+  }
+
+  public int workerMaxProduceAttempt() {
+    return getInt(WORKER_MAX_PRODUCE_ATTEMPT);
+  }
+
+  public long workerMaxBackoffMs() {
+    return getLong(WORKER_MAX_BACKOFF_MS);
+  }
+
+  public double workerBackoffMultiplier() {
+    return getDouble(WORKER_BACKOFF_MULTIPLIER);
+  }
+
+  public List<String> workerRetriableExceptions() {
+    return getList(WORKER_RETRIABLE_EXCEPTIONS);
   }
 
   public String connectorName() {
