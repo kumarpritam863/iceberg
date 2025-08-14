@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.channel.utils.Envelope;
+import org.apache.iceberg.connect.channel.utils.KafkaClientFactory;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.connect.data.SinkWriterResult;

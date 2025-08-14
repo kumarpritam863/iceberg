@@ -1,22 +1,24 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *  * Licensed to the Apache Software Foundation (ASF) under one
+ *  * or more contributor license agreements.  See the NOTICE file
+ *  * distributed with this work for additional information
+ *  * regarding copyright ownership.  The ASF licenses this file
+ *  * to you under the Apache License, Version 2.0 (the
+ *  * "License"); you may not use this file except in compliance
+ *  * with the License.  You may obtain a copy of the License at
+ *  *
+ *  *   http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  * Unless required by applicable law or agreed to in writing,
+ *  * software distributed under the License is distributed on an
+ *  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  * KIND, either express or implied.  See the License for the
+ *  * specific language governing permissions and limitations
+ *  * under the License.
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
  */
-package org.apache.iceberg.connect.channel;
+package org.apache.iceberg.connect.channel.utils;
 
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -33,7 +35,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class CommitState {
+public class CommitState {
   private static final Logger LOG = LoggerFactory.getLogger(CommitState.class);
 
   private final List<Envelope> commitBuffer = Lists.newArrayList();
@@ -42,11 +44,11 @@ class CommitState {
   private UUID currentCommitId;
   private final IcebergSinkConfig config;
 
-  CommitState(IcebergSinkConfig config) {
+  public CommitState(IcebergSinkConfig config) {
     this.config = config;
   }
 
-  void addResponse(Envelope envelope) {
+  public void addResponse(Envelope envelope) {
     commitBuffer.add(envelope);
     if (!isCommitInProgress()) {
       DataWritten dataWritten = (DataWritten) envelope.event().payload();
@@ -56,7 +58,7 @@ class CommitState {
     }
   }
 
-  void addReady(Envelope envelope) {
+  public void addReady(Envelope envelope) {
     DataComplete dataComplete = (DataComplete) envelope.event().payload();
     readyBuffer.add(dataComplete);
     if (!isCommitInProgress()) {
@@ -66,7 +68,7 @@ class CommitState {
     }
   }
 
-  UUID currentCommitId() {
+  public UUID currentCommitId() {
     return currentCommitId;
   }
 
@@ -74,7 +76,7 @@ class CommitState {
     return currentCommitId != null;
   }
 
-  boolean isCommitIntervalReached() {
+  public boolean isCommitIntervalReached() {
     if (startTime == 0) {
       startTime = System.currentTimeMillis();
     }
@@ -83,21 +85,21 @@ class CommitState {
         && System.currentTimeMillis() - startTime >= config.commitIntervalMs());
   }
 
-  void startNewCommit() {
+  public void startNewCommit() {
     currentCommitId = UUID.randomUUID();
     startTime = System.currentTimeMillis();
   }
 
-  void endCurrentCommit() {
+  public void endCurrentCommit() {
     readyBuffer.clear();
     currentCommitId = null;
   }
 
-  void clearResponses() {
+  public void clearResponses() {
     commitBuffer.clear();
   }
 
-  boolean isCommitTimedOut() {
+  public boolean isCommitTimedOut() {
     if (!isCommitInProgress()) {
       return false;
     }
@@ -109,7 +111,7 @@ class CommitState {
     return false;
   }
 
-  boolean isCommitReady(int expectedPartitionCount) {
+  public boolean isCommitReady(int expectedPartitionCount) {
     if (!isCommitInProgress()) {
       return false;
     }
@@ -137,14 +139,14 @@ class CommitState {
     return false;
   }
 
-  Map<TableReference, List<Envelope>> tableCommitMap() {
+  public Map<TableReference, List<Envelope>> tableCommitMap() {
     return commitBuffer.stream()
         .collect(
             Collectors.groupingBy(
                 envelope -> ((DataWritten) envelope.event().payload()).tableReference()));
   }
 
-  OffsetDateTime validThroughTs(boolean partialCommit) {
+  public OffsetDateTime validThroughTs(boolean partialCommit) {
     boolean hasValidThroughTs =
         !partialCommit
             && readyBuffer.stream()

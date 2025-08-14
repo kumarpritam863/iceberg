@@ -35,6 +35,7 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.MockIcebergSinkTask;
 import org.apache.iceberg.connect.TableSinkConfig;
+import org.apache.iceberg.connect.channel.utils.KafkaClientFactory;
 import org.apache.iceberg.inmemory.InMemoryCatalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;

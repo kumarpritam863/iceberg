@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.connect.channel.utils.KafkaUtils;
 import org.apache.iceberg.connect.data.IcebergWriterResult;
 import org.apache.iceberg.connect.data.Offset;
 import org.apache.iceberg.connect.data.SinkWriter;

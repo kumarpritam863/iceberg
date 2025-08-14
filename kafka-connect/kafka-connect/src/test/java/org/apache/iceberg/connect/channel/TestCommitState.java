@@ -25,6 +25,8 @@ import static org.mockito.Mockito.when;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.channel.utils.CommitState;
+import org.apache.iceberg.connect.channel.utils.Envelope;
 import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.Payload;
