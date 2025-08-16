@@ -35,6 +35,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -98,6 +100,8 @@ class Coordinator {
     private final String producerId;
     private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
     private final String connectGroupId;
+    private final AtomicBoolean isCoordinatorStopping = new AtomicBoolean(false);
+    private final AtomicInteger coordinatorCommitAttempt = new AtomicInteger(0);
 
     Coordinator(IcebergSinkConfig config) {
         this.connectGroupId = config.connectGroupId();
@@ -127,6 +131,17 @@ class Coordinator {
         this.controlProducer = clientFactory.createProducer(transactionalId);
         this.controlConsumer = clientFactory.createConsumer(config.connectGroupId() + "-coordinator");
         this.producerId = UUID.randomUUID().toString();
+    }
+
+    void start() {
+        while (!isCoordinatorStopping.get()) {
+            try {
+                process();
+            } catch (Exception exception) {
+                LOG.error("Coordinator error while processing", exception);
+                isCoordinatorStopping.set(true);
+            }
+        }
     }
 
     void process() {
@@ -206,8 +221,9 @@ class Coordinator {
     private void commit(boolean partialCommit) {
         try {
             doCommit(partialCommit);
+            coordinatorCommitAttempt.set(0);
         } catch (Exception e) {
-            LOG.warn("Commit failed, will try again next cycle", e);
+            LOG.warn("Commit failed for attempt {}, will try again next cycle", coordinatorCommitAttempt.incrementAndGet(), e);
         } finally {
             commitState.endCurrentCommit();
         }

@@ -20,8 +20,6 @@
  */
 
 package org.apache.iceberg.connect.coordinator;
-
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 
@@ -61,11 +59,8 @@ public class CoordinatorEntryPoint {
 
         AtomicLong coordinatorProcessCount = new AtomicLong(0);
         try {
-            while (true) {
-                LOG.info("Starting coordinator process no {}", coordinatorProcessCount.incrementAndGet());
-                coordinator.process();
-                LOG.info("Completed coordinator process no {}", coordinatorProcessCount.get());
-            }
+            LOG.info("Starting process num {}", coordinatorProcessCount.incrementAndGet());
+            coordinator.start();
         } finally {
             coordinator.stop();
         }
