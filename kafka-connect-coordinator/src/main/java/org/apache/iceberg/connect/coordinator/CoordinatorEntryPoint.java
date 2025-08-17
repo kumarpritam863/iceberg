@@ -47,11 +47,13 @@ public class CoordinatorEntryPoint {
             LOG.error("Failed while loading config", ex);
         }
 
+        LOG.info("properties = {}", props);
         // Build IcebergSinkConfig
         Map<String, String> configMap = new HashMap<>();
         for (String name : props.stringPropertyNames()) {
             configMap.put(name, props.getProperty(name));
         }
+        LOG.info("ConfigMap = {}", configMap);
         IcebergSinkConfig config = new IcebergSinkConfig(configMap);
         Coordinator coordinator = new Coordinator(
                 config
