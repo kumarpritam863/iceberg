@@ -55,6 +55,8 @@ public class CoordinatorEntryPoint {
         }
         System.out.println("configmap = " + configMap);
         IcebergSinkConfig config = new IcebergSinkConfig(configMap);
+        System.out.println("Kafka props = [ " + config.kafkaProps() + " ]");
+        System.out.println("Catalog props = [ " + config.catalogProps() + " ]");
         Coordinator coordinator = new Coordinator(
                 config
         );
