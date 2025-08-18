@@ -69,6 +69,7 @@ import org.apache.iceberg.util.Tasks;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
@@ -193,9 +194,11 @@ class Coordinator {
                         System.out.println("Got event.");
 
                         if (event.groupId().equals(config.coordinatorId())) {
-                            String connectGroupId = new String(record.headers().lastHeader("connect_group_id").value(), StandardCharsets.UTF_8);
+                            String connectGroupId = connectGroupId(record);
                             System.out.println("got event = " + event.payload().type().name() + " from " + connectGroupId);
-                            memberMap.computeIfAbsent(connectGroupId, cgid -> members(clientFactory, cgid));
+                            if ("".equalsIgnoreCase(connectGroupId)) {
+                                return;
+                            }
                             System.out.println("Received event of type: {" +  event.type().name() + "}");
                             if (receive(connectGroupId, new Envelope(event, record.partition(), record.offset()))) {
                                 System.out.println("Handled event of type: " + event.type().name());
@@ -204,6 +207,13 @@ class Coordinator {
                     });
             records = controlConsumer.poll(Coordinator.POLL_DURATION);
         }
+    }
+
+    private String connectGroupId(ConsumerRecord<String, byte[]> record) {
+        if (null == record || null == record.headers() || null == record.headers().lastHeader("connect_group_id")) {
+            return "";
+        }
+        return new String(record.headers().lastHeader("connect_group_id").value(), StandardCharsets.UTF_8);
     }
 
     protected boolean receive(String connectGroupId, Envelope envelope) {
