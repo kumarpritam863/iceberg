@@ -131,7 +131,7 @@ class Coordinator {
                 System.out.println("Starting coordinator process = "+ processNumber++);
                 process();
             } catch (Exception exception) {
-                System.out.println("Coordinator error while processing = " + exception.getMessage());
+                System.out.println("Coordinator error while processing = " + exception);
                 isCoordinatorStopping.set(true);
             }
         }
