@@ -25,9 +25,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -51,7 +51,6 @@ import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.CatalogUtils;
 import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.channel.utils.CommitState;
 import org.apache.iceberg.connect.channel.utils.Envelope;
 import org.apache.iceberg.connect.channel.utils.KafkaClientFactory;
 import org.apache.iceberg.connect.channel.utils.KafkaUtils;
@@ -69,7 +68,6 @@ import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFact
 import org.apache.iceberg.util.Tasks;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
-import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -77,6 +75,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.source.SourceTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,8 +89,6 @@ class Coordinator {
 
     private final Catalog catalog;
     private final IcebergSinkConfig config;
-    private final int totalPartitionCount;
-    private final String snapshotOffsetsProp;
     private final ExecutorService exec;
     private final CommitState commitState;
     private final Producer<String, byte[]> controlProducer;
@@ -99,21 +96,16 @@ class Coordinator {
     private final String controlTopic;
     private final String producerId;
     private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
-    private final String connectGroupId;
     private final AtomicBoolean isCoordinatorStopping = new AtomicBoolean(false);
     private final AtomicInteger coordinatorCommitAttempt = new AtomicInteger(0);
+    private final Map<String, Integer> memberMap = Maps.newHashMap();
+    private final KafkaClientFactory clientFactory;
 
     Coordinator(IcebergSinkConfig config) {
-        this.connectGroupId = config.connectGroupId();
         this.controlTopic = config.controlTopic();
         this.catalog = CatalogUtils.loadCatalog(config);
         this.config = config;
-        KafkaClientFactory clientFactory = new KafkaClientFactory(config.kafkaProps());
-        this.totalPartitionCount =
-                members(clientFactory).stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
-        this.snapshotOffsetsProp =
-                String.format(
-                        "kafka.connect.offsets.%s.%s", config.controlTopic(), config.connectGroupId());
+        this.clientFactory = new KafkaClientFactory(config.kafkaProps());
         this.exec =
                 new ThreadPoolExecutor(
                         config.commitThreads(),
@@ -133,12 +125,13 @@ class Coordinator {
         this.producerId = UUID.randomUUID().toString();
     }
 
-    void start() {
+    void start(long processNumber) {
         while (!isCoordinatorStopping.get()) {
             try {
+                System.out.println("Starting coordinator process = "+ processNumber);
                 process();
             } catch (Exception exception) {
-                LOG.error("Coordinator error while processing", exception);
+                System.out.println("Coordinator error while processing = " + exception.getMessage());
                 isCoordinatorStopping.set(true);
             }
         }
@@ -146,18 +139,20 @@ class Coordinator {
 
     void process() {
         if (commitState.isCommitIntervalReached()) {
+            System.out.println("Commit interval reached. Starting new commit");
             // send out begin commit
             commitState.startNewCommit();
             Event event =
-                    new Event(connectGroupId, new StartCommit(commitState.currentCommitId()));
+                    new Event(config.coordinatorId(), new StartCommit(commitState.currentCommitId()));
             send(event);
-            LOG.info("Commit {} initiated", commitState.currentCommitId());
+            System.out.println("Commit " + commitState.currentCommitId() + " initiated");
         }
 
         consumeAvailable();
 
         if (commitState.isCommitTimedOut()) {
-            commit(true);
+            System.out.println("commit timed out");
+            commit("", true);
         }
     }
 
@@ -182,6 +177,7 @@ class Coordinator {
     }
 
     protected void consumeAvailable() {
+        System.out.println("Starting consuming for responses from the workers. Current List of connect group ids = {" + commitState.connectGroupIds());
         ConsumerRecords<String, byte[]> records = controlConsumer.poll(Coordinator.POLL_DURATION);
         while (!records.isEmpty()) {
             records.forEach(
@@ -192,10 +188,13 @@ class Coordinator {
 
                         Event event = AvroUtil.decode(record.value());
 
-                        if (event.groupId().equals(connectGroupId)) {
+                        if (event.groupId().equals(config.coordinatorId())) {
+                            String connectGroupId = new String(record.headers().lastHeader("connect_group_id").value(), StandardCharsets.UTF_8);
+                            System.out.println("got event = " + event.payload().type().name() + " from " + connectGroupId);
+                            memberMap.computeIfAbsent(connectGroupId, cgid -> members(clientFactory, cgid));
                             LOG.debug("Received event of type: {}", event.type().name());
-                            if (receive(new Envelope(event, record.partition(), record.offset()))) {
-                                LOG.info("Handled event of type: {}", event.type().name());
+                            if (receive(connectGroupId, new Envelope(event, record.partition(), record.offset()))) {
+                                System.out.println("Handled event of type: " + event.type().name());
                             }
                         }
                     });
@@ -203,24 +202,25 @@ class Coordinator {
         }
     }
 
-    protected boolean receive(Envelope envelope) {
+    protected boolean receive(String connectGroupId, Envelope envelope) {
         switch (envelope.event().payload().type()) {
             case DATA_WRITTEN:
-                commitState.addResponse(envelope);
+                commitState.addResponse(connectGroupId, envelope);
                 return true;
             case DATA_COMPLETE:
-                commitState.addReady(envelope);
-                if (commitState.isCommitReady(totalPartitionCount)) {
-                    commit(false);
+                commitState.addReady(connectGroupId, envelope);
+                if (commitState.isCommitReady(connectGroupId, memberMap.computeIfAbsent(connectGroupId, cgid ->members(clientFactory, cgid)))) {
+                    commitState.markCommitReadyFor(connectGroupId);
+                    commit(connectGroupId, false);
                 }
                 return true;
         }
         return false;
     }
 
-    private void commit(boolean partialCommit) {
+    private void commit(String connectGroupId, boolean partialCommit) {
         try {
-            doCommit(partialCommit);
+            doCommit(connectGroupId, partialCommit);
             coordinatorCommitAttempt.set(0);
         } catch (Exception e) {
             LOG.warn("Commit failed for attempt {}, will try again next cycle", coordinatorCommitAttempt.incrementAndGet(), e);
@@ -229,19 +229,23 @@ class Coordinator {
         }
     }
 
-    private void doCommit(boolean partialCommit) {
-        Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
+    private void doCommit(String connectGroupId, boolean partialCommit) {
+        Map<String, Map<TableReference, List<Envelope>>> commitMap = commitState.tableCommitMap(connectGroupId, partialCommit);
 
         String offsetsJson = offsetsJson();
-        OffsetDateTime validThroughTs = commitState.validThroughTs(partialCommit);
+        OffsetDateTime validThroughTs = commitState.validThroughTs(connectGroupId, partialCommit);
 
         Tasks.foreach(commitMap.entrySet())
                 .executeWith(exec)
                 .stopOnFailure()
-                .run(
-                        entry -> {
-                            commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-                        });
+                .run(entry -> {
+                    String groupId = entry.getKey();
+                    Map<TableReference, List<Envelope>> tables = entry.getValue();
+
+                    tables.forEach((tableRef, envelopes) ->
+                            commitToTable(groupId, tableRef, envelopes, offsetsJson, validThroughTs)
+                    );
+                });
 
         // we should only get here if all tables committed successfully...
         commitConsumerOffsets();
@@ -278,6 +282,7 @@ class Coordinator {
     }
 
     private void commitToTable(
+            String connectGroupId,
             TableReference tableReference,
             List<Envelope> envelopeList,
             String offsetsJson,
@@ -293,7 +298,7 @@ class Coordinator {
 
         String branch = config.tableConfig(tableIdentifier.toString()).commitBranch();
 
-        Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(table, branch);
+        Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(connectGroupId, table, branch);
 
         List<DataWritten> payloads =
                 envelopeList.stream()
@@ -329,7 +334,8 @@ class Coordinator {
                 if (branch != null) {
                     appendOp.toBranch(branch);
                 }
-                appendOp.set(snapshotOffsetsProp, offsetsJson);
+                appendOp.set(String.format(
+                        "kafka.connect.offsets.%s.%s", controlTopic, connectGroupId), offsetsJson);
                 appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
                 if (validThroughTs != null) {
                     appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -341,7 +347,8 @@ class Coordinator {
                 if (branch != null) {
                     deltaOp.toBranch(branch);
                 }
-                deltaOp.set(snapshotOffsetsProp, offsetsJson);
+                deltaOp.set(String.format(
+                        "kafka.connect.offsets.%s.%s", controlTopic, connectGroupId), offsetsJson);
                 deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
                 if (validThroughTs != null) {
                     deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
@@ -380,11 +387,12 @@ class Coordinator {
         return table.snapshot(branch);
     }
 
-    private Map<Integer, Long> lastCommittedOffsetsForTable(Table table, String branch) {
+    private Map<Integer, Long> lastCommittedOffsetsForTable(String connectGroupId, Table table, String branch) {
         Snapshot snapshot = latestSnapshot(table, branch);
         while (snapshot != null) {
             Map<String, String> summary = snapshot.summary();
-            String value = summary.get(snapshotOffsetsProp);
+            String value = summary.get(String.format(
+                    "kafka.connect.offsets.%s.%s", controlTopic, connectGroupId));
             if (value != null) {
                 TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
                 try {
@@ -422,11 +430,11 @@ class Coordinator {
         }
     }
 
-    private Collection<MemberDescription> members(KafkaClientFactory clientFactory) {
+    private int members(KafkaClientFactory clientFactory, String cgid) {
         ConsumerGroupDescription groupDesc;
         try (Admin admin = clientFactory.createAdmin()) {
-            groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
-            return groupDesc.members();
+            groupDesc = KafkaUtils.consumerGroupDescription(cgid, admin);
+            return groupDesc.members().stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
         }
     }
 }

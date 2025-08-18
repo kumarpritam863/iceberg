@@ -108,6 +108,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
   public static final ConfigDef CONFIG_DEF = newConfigDef();
+  private static final String COORDINATOR_ID = "iceberg.coordinator-id";
 
   public static String version() {
     return IcebergBuild.version();
@@ -235,6 +236,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+            COORDINATOR_ID,
+            ConfigDef.Type.STRING,
+            "",
+            Importance.LOW,
+            "Id of the coordinator, if running on coordinator as service");
     return configDef;
   }
 
@@ -491,5 +498,9 @@ public class IcebergSinkConfig extends AbstractConfig {
         "Worker properties not loaded, using only {}* properties for Kafka clients",
         KAFKA_PROP_PREFIX);
     return ImmutableMap.of();
+  }
+
+  public String coordinatorId() {
+    return getString(COORDINATOR_ID);
   }
 }

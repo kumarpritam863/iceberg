@@ -18,6 +18,7 @@
  */
 package org.apache.iceberg.connect.channel;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,7 @@ abstract class Channel {
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
+  private final String coordinatorId;
 
   Channel(
       String name,
@@ -73,6 +75,7 @@ abstract class Channel {
     this.admin = clientFactory.createAdmin();
 
     this.producerId = UUID.randomUUID().toString();
+    this.coordinatorId = config.coordinatorId();
   }
 
   protected void send(Event event) {
@@ -90,8 +93,14 @@ abstract class Channel {
                 event -> {
                   LOG.info("Sending event of type: {}", event.type().name());
                   byte[] data = AvroUtil.encode(event);
-                  // key by producer ID to keep event order
-                  return new ProducerRecord<>(controlTopic, producerId, data);
+
+                  ProducerRecord<String, byte[]> record =
+                          new ProducerRecord<>(controlTopic, producerId, data);
+
+                  // add connect_group_id header
+                  record.headers().add("connect_group_id", connectGroupId.getBytes(StandardCharsets.UTF_8));
+
+                  return record;
                 })
             .collect(Collectors.toList());
 

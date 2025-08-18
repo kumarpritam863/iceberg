@@ -99,7 +99,7 @@ class Worker extends Channel {
             .map(
                 writeResult ->
                     new Event(
-                        config.connectGroupId(),
+                        config.coordinatorId(),
                         new DataWritten(
                             writeResult.partitionStruct(),
                             commitId,
@@ -108,7 +108,7 @@ class Worker extends Channel {
                             writeResult.deleteFiles())))
             .collect(Collectors.toList());
 
-    Event readyEvent = new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
+    Event readyEvent = new Event(config.coordinatorId(), new DataComplete(commitId, assignments));
     events.add(readyEvent);
 
     send(events, results.sourceOffsets());

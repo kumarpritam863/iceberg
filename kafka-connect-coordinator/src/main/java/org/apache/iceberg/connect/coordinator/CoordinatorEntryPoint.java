@@ -63,8 +63,8 @@ public class CoordinatorEntryPoint {
 
         AtomicLong coordinatorProcessCount = new AtomicLong(0);
         try {
-            LOG.info("Starting process num {}", coordinatorProcessCount.incrementAndGet());
-            coordinator.start();
+            System.out.println("Starting process num = " + coordinatorProcessCount.incrementAndGet());
+            coordinator.start(coordinatorProcessCount.get());
         } finally {
             coordinator.stop();
         }
