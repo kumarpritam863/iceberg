@@ -75,7 +75,6 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
-import org.apache.kafka.connect.source.SourceTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -122,6 +121,7 @@ class Coordinator {
         String transactionalId = config.transactionalPrefix() + "coordinator" + config.transactionalSuffix();
         this.controlProducer = clientFactory.createProducer(transactionalId);
         this.controlConsumer = clientFactory.createConsumer(config.connectGroupId() + "-coordinator");
+        this.controlConsumer.subscribe(List.of(controlTopic));
         this.producerId = UUID.randomUUID().toString();
     }
 
@@ -169,7 +169,7 @@ class Coordinator {
                 try {
                     controlProducer.abortTransaction();
                 } catch (Exception ex) {
-                    LOG.warn("Error aborting producer transaction", ex);
+                    System.out.println("Error aborting producer transaction = {" + ex.getMessage() + "}");
                 }
                 throw e;
             }
@@ -192,7 +192,7 @@ class Coordinator {
                             String connectGroupId = new String(record.headers().lastHeader("connect_group_id").value(), StandardCharsets.UTF_8);
                             System.out.println("got event = " + event.payload().type().name() + " from " + connectGroupId);
                             memberMap.computeIfAbsent(connectGroupId, cgid -> members(clientFactory, cgid));
-                            LOG.debug("Received event of type: {}", event.type().name());
+                            System.out.println("Received event of type: {" +  event.type().name() + "}");
                             if (receive(connectGroupId, new Envelope(event, record.partition(), record.offset()))) {
                                 System.out.println("Handled event of type: " + event.type().name());
                             }
@@ -426,7 +426,7 @@ class Coordinator {
         try {
             ((AutoCloseable) catalog).close();
         } catch (Exception ex) {
-            LOG.error("Failed to close the catalog", ex);
+            System.out.println("Failed to close the catalog = " + ex.getMessage());
         }
     }
 
