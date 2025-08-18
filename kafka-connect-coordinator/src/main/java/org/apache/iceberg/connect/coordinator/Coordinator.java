@@ -178,7 +178,7 @@ class Coordinator {
     }
 
     protected void consumeAvailable() {
-        System.out.println("Starting consuming for responses from the workers. Current List of connect group ids = {" + commitState.connectGroupIds());
+        System.out.println("Starting consuming for responses from the workers. Current List of connect group ids = {" + commitState.connectGroupIds() + "}");
         ConsumerRecords<String, byte[]> records = controlConsumer.poll(Coordinator.POLL_DURATION);
         while (!records.isEmpty()) {
             records.forEach(
