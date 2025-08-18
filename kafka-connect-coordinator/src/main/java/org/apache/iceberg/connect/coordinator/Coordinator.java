@@ -120,7 +120,7 @@ class Coordinator {
 
         String transactionalId = config.transactionalPrefix() + "coordinator" + config.transactionalSuffix();
         this.controlProducer = clientFactory.createProducer(transactionalId);
-        this.controlConsumer = clientFactory.createConsumer(config.connectGroupId() + "-coordinator");
+        this.controlConsumer = clientFactory.createConsumer(config.coordinatorId() + "-coordinator");
         this.controlConsumer.subscribe(List.of(controlTopic));
         this.producerId = UUID.randomUUID().toString();
     }
@@ -180,6 +180,7 @@ class Coordinator {
     protected void consumeAvailable() {
         System.out.println("Starting consuming for responses from the workers. Current List of connect group ids = {" + commitState.connectGroupIds() + "}");
         ConsumerRecords<String, byte[]> records = controlConsumer.poll(Coordinator.POLL_DURATION);
+        System.out.println("polled { " + records.count() + "} records.");
         while (!records.isEmpty()) {
             records.forEach(
                     record -> {
@@ -188,6 +189,8 @@ class Coordinator {
                         controlTopicOffsets.put(record.partition(), record.offset() + 1);
 
                         Event event = AvroUtil.decode(record.value());
+
+                        System.out.println("Got event.");
 
                         if (event.groupId().equals(config.coordinatorId())) {
                             String connectGroupId = new String(record.headers().lastHeader("connect_group_id").value(), StandardCharsets.UTF_8);
