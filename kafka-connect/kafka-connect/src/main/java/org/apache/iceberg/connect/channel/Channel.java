@@ -57,6 +57,7 @@ abstract class Channel {
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
+  private final String coordinatorId;
 
   Channel(
       String name,
@@ -64,6 +65,7 @@ abstract class Channel {
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
+    this.coordinatorId = config.coordinatorId();
     this.controlTopic = config.controlTopic();
     this.connectGroupId = config.connectGroupId();
     this.context = context;
@@ -137,7 +139,7 @@ abstract class Channel {
 
             Event event = AvroUtil.decode(record.value());
 
-            if (event.groupId().equals(connectGroupId)) {
+            if (event.groupId().equals(coordinatorId)) {
               LOG.debug("Received event of type: {}", event.type().name());
               if (receive(new Envelope(event, record.partition(), record.offset()))) {
                 LOG.info("Handled event of type: {}", event.type().name());

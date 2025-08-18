@@ -128,7 +128,7 @@ class Coordinator {
     void start(long processNumber) {
         while (!isCoordinatorStopping.get()) {
             try {
-                System.out.println("Starting coordinator process = "+ processNumber);
+                System.out.println("Starting coordinator process = "+ processNumber++);
                 process();
             } catch (Exception exception) {
                 System.out.println("Coordinator error while processing = " + exception.getMessage());
@@ -142,6 +142,7 @@ class Coordinator {
             System.out.println("Commit interval reached. Starting new commit");
             // send out begin commit
             commitState.startNewCommit();
+            System.out.println("Started new commit. Now preparing event");
             Event event =
                     new Event(config.coordinatorId(), new StartCommit(commitState.currentCommitId()));
             send(event);
