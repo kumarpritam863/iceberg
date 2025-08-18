@@ -57,7 +57,6 @@ abstract class Channel {
   private final Admin admin;
   private final Map<Integer, Long> controlTopicOffsets = Maps.newHashMap();
   private final String producerId;
-  private final String coordinatorId;
 
   Channel(
       String name,
@@ -75,7 +74,6 @@ abstract class Channel {
     this.admin = clientFactory.createAdmin();
 
     this.producerId = UUID.randomUUID().toString();
-    this.coordinatorId = config.coordinatorId();
   }
 
   protected void send(Event event) {
