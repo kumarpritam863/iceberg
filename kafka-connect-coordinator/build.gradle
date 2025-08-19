@@ -56,11 +56,10 @@ dependencies {
     // Relocated Guava
     implementation project(':iceberg-bundled-guava')
 
-    // Avro for IndexedRecord
-    implementation 'org.apache.avro:avro'
+    implementation libs.avro.avro
 
     // Kafka client
-    implementation 'org.apache.kafka:kafka-clients'
+    compileOnly libs.kafka.clients
 
     // Logging
     implementation 'org.slf4j:slf4j-api'
