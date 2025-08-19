@@ -224,7 +224,6 @@ class Coordinator {
             case DATA_COMPLETE:
                 commitState.addReady(connectGroupId, envelope);
                 if (commitState.isCommitReady(connectGroupId, memberMap.computeIfAbsent(connectGroupId, cgid ->members(clientFactory, cgid)))) {
-                    commitState.markCommitReadyFor(connectGroupId);
                     commit(connectGroupId, false);
                 }
                 return true;

@@ -55,7 +55,9 @@ public class CommitState {
     }
 
     public void addResponse(String connectGroupId, Envelope envelope) {
-        commitBuffer.getOrDefault(connectGroupId, Lists.newArrayList()).add(envelope);
+        List<Envelope> envelopeForConnectGroupId = commitBuffer.getOrDefault(connectGroupId, Lists.newArrayList());
+        envelopeForConnectGroupId.add(envelope);
+        commitBuffer.put(connectGroupId, envelopeForConnectGroupId);
         isCommitReadyMap.putIfAbsent(connectGroupId, new AtomicBoolean(false));
         if (!isCommitInProgress()) {
             DataWritten dataWritten = (DataWritten) envelope.event().payload();
@@ -67,7 +69,10 @@ public class CommitState {
 
     public void addReady(String connectGroupId, Envelope envelope) {
         DataComplete dataComplete = (DataComplete) envelope.event().payload();
-        readyBuffer.getOrDefault(connectGroupId, Lists.newArrayList()).add(dataComplete);
+        List<DataComplete> dataCompleteListForConnectGroupId = readyBuffer.getOrDefault(connectGroupId, Lists.newArrayList());
+        dataCompleteListForConnectGroupId.add(dataComplete);
+        readyBuffer.put(connectGroupId, dataCompleteListForConnectGroupId);
+        System.out.println("ready buffer after addReady op is " + readyBuffer);
         if (!isCommitInProgress()) {
             LOG.warn(
                     "Received commit ready when no commit in progress, this can happen during recovery. Commit ID: {}",
@@ -144,6 +149,7 @@ public class CommitState {
                     "Commit {} ready, received responses for all {} partitions",
                     currentCommitId,
                     receivedPartitionCount);
+            markCommitReadyFor(connectGroupId);
             return true;
         }
 
@@ -153,7 +159,6 @@ public class CommitState {
                 currentCommitId,
                 receivedPartitionCount,
                 expectedPartitionCount);
-
         return false;
     }
 
@@ -218,7 +223,7 @@ public class CommitState {
     }
 
 
-    public void markCommitReadyFor(String connectGroupId) {
+    private void markCommitReadyFor(String connectGroupId) {
         isCommitReadyMap
                 .computeIfAbsent(connectGroupId, k -> new AtomicBoolean(false))
                 .set(true);
