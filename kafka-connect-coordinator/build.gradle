@@ -42,7 +42,6 @@ dependencies {
     implementation 'org.apache.kafka:kafka-clients:3.7.0'
     implementation 'org.slf4j:slf4j-api:2.0.12'
     implementation 'ch.qos.logback:logback-classic:1.4.14'
-    implementation 'org.apache.avro:avro:1.11.3'
 
     compileOnly libs.kafka.clients
     compileOnly libs.kafka.connect.api
