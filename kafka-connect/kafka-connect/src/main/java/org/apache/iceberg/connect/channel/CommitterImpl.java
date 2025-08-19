@@ -116,13 +116,16 @@ public class CommitterImpl implements Committer {
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
-    LOG.info("Stopping worker {}-{}.", config.connectorName(), config.taskId());
     stopWorker();
-    LOG.info(
-        "Seeking to last committed offsets for worker {}-{}.",
-        config.connectorName(),
-        config.taskId());
-    KafkaUtils.seekToLastCommittedOffsets(context);
+    if (!closedPartitions.isEmpty() && isInitialized.get()) {
+      LOG.info(
+              "Seeking to last committed offsets for worker {}-{}.",
+              config.connectorName(),
+              config.taskId());
+      KafkaUtils.seekToLastCommittedOffsets(context);
+    } else {
+      LOG.info("Got unexpected close call");
+    }
   }
 
   @Override

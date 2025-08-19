@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
@@ -47,21 +48,24 @@ public class IcebergSinkTask extends SinkTask {
     this.config = new IcebergSinkConfig(props);
     this.catalog = CatalogUtils.loadCatalog(config);
     this.committer = CommitterFactory.createCommitter(config);
+    committer.open(catalog, config, context, List.of());
+    LOG.info("started connector");
   }
 
   @Override
   public void open(Collection<TopicPartition> partitions) {
-    committer.open(catalog, config, context, partitions);
+    LOG.info("got open call for {}", partitions);
   }
 
   @Override
   public void close(Collection<TopicPartition> partitions) {
+    LOG.info("got close call for {}", partitions);
     committer.close(partitions);
   }
 
   private void close() {
     if (committer != null) {
-      committer.close(context.assignment());
+      committer.close(List.of());
       committer = null;
     }
 
