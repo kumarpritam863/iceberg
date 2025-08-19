@@ -445,10 +445,13 @@ class Coordinator {
     }
 
     private int members(KafkaClientFactory clientFactory, String cgid) {
+        System.out.println("Finding member for " + cgid);
         ConsumerGroupDescription groupDesc;
         try (Admin admin = clientFactory.createAdmin()) {
             groupDesc = KafkaUtils.consumerGroupDescription(cgid, admin);
-            return groupDesc.members().stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
+            int members = groupDesc.members().stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
+            System.out.println("Found " + members + " for " + cgid);
+            return members;
         }
     }
 }

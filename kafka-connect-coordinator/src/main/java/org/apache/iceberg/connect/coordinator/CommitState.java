@@ -123,7 +123,9 @@ public class CommitState {
     }
 
     public boolean isCommitReady(String connectGroupId, int expectedPartitionCount) {
+        System.out.println("checking if commit ready for " + connectGroupId);
         if (!isCommitInProgress()) {
+            System.out.println("Commit in progress, commit not ready for " + connectGroupId);
             return false;
         }
 
@@ -133,7 +135,11 @@ public class CommitState {
                         .mapToInt(payload -> payload.assignments().size())
                         .sum();
 
+        System.out.println("Received partition count for " + connectGroupId + " is " + receivedPartitionCount);
+
         if (receivedPartitionCount >= expectedPartitionCount) {
+            System.out.println(
+                    "Commit " + currentCommitId + " ready, received responses for all " + receivedPartitionCount);
             LOG.info(
                     "Commit {} ready, received responses for all {} partitions",
                     currentCommitId,
@@ -141,6 +147,7 @@ public class CommitState {
             return true;
         }
 
+        System.out.println("Commit " + currentCommitId + " not ready, received responses for " + receivedPartitionCount + " of " + expectedPartitionCount + " partitions, waiting for more");
         LOG.info(
                 "Commit {} not ready, received responses for {} of {} partitions, waiting for more",
                 currentCommitId,
