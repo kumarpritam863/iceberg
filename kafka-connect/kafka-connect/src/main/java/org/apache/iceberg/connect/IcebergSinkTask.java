@@ -84,6 +84,7 @@ public class IcebergSinkTask extends SinkTask {
   @Override
   public void put(Collection<SinkRecord> sinkRecords) {
     if (committer != null) {
+      LOG.info("got put call for {}", sinkRecords);
       committer.save(sinkRecords);
     }
   }

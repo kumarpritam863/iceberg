@@ -130,6 +130,7 @@ abstract class Channel {
 
   protected void consumeAvailable(Duration pollDuration) {
     ConsumerRecords<String, byte[]> records = consumer.poll(pollDuration);
+    LOG.info("consumed {} records", records.count());
     while (!records.isEmpty()) {
       records.forEach(
           record -> {
@@ -139,8 +140,9 @@ abstract class Channel {
 
             Event event = AvroUtil.decode(record.value());
 
+            LOG.info("got event with id {}", event.groupId());
             if (event.groupId().equals(coordinatorId)) {
-              LOG.debug("Received event of type: {}", event.type().name());
+              LOG.info("Received event of type: {}", event.type().name());
               if (receive(new Envelope(event, record.partition(), record.offset()))) {
                 LOG.info("Handled event of type: {}", event.type().name());
               }

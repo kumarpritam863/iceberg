@@ -131,14 +131,17 @@ public class CommitterImpl implements Committer {
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
+      LOG.info("saving records");
       startWorker();
       worker.save(sinkRecords);
     }
+    LOG.info("processing control events");
     processControlEvents();
   }
 
   private void processControlEvents() {
     if (worker != null) {
+      LOG.info("worker processing control events");
       worker.process();
     }
   }
