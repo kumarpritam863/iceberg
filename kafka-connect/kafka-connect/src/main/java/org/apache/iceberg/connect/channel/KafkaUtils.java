@@ -18,7 +18,7 @@
  *  * under the License.
  *
  */
-package org.apache.iceberg.connect.channel.utils;
+package org.apache.iceberg.connect.channel;
 
 import java.util.Map;
 import java.util.concurrent.ExecutionException;

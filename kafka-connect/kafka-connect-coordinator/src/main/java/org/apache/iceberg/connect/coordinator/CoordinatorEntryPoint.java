@@ -21,7 +21,6 @@
 
 package org.apache.iceberg.connect.coordinator;
 import java.util.concurrent.atomic.AtomicLong;
-import org.apache.iceberg.connect.IcebergSinkConfig;
 
 
 import java.io.FileInputStream;
@@ -54,7 +53,7 @@ public class CoordinatorEntryPoint {
             configMap.put(name, props.getProperty(name));
         }
         System.out.println("configmap = " + configMap);
-        IcebergSinkConfig config = new IcebergSinkConfig(configMap);
+        CoordinatorConfig config = new CoordinatorConfig(configMap);
         System.out.println("Kafka props = [ " + config.kafkaProps() + " ]");
         System.out.println("Catalog props = [ " + config.catalogProps() + " ]");
         Coordinator coordinator = new Coordinator(

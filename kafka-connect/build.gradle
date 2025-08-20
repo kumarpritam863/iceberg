@@ -31,6 +31,41 @@ project(':iceberg-kafka-connect:iceberg-kafka-connect-events') {
   }
 }
 
+project(':iceberg-kafka-connect:iceberg-kafka-connect-common') {
+  dependencies {
+    implementation project(':iceberg-core')
+    implementation project(':iceberg-common')
+    implementation project(':iceberg-kafka-connect:iceberg-kafka-connect-events')
+    compileOnly libs.kafka.clients
+    compileOnly libs.kafka.connect.api
+    compileOnly libs.kafka.connect.json
+    implementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
+  }
+
+  test {
+    useJUnitPlatform()
+  }
+}
+
+project(':iceberg-kafka-connect:iceberg-kafka-connect-coordinator') {
+  dependencies {
+    api project(':iceberg-api')
+    implementation project(':iceberg-core')
+    implementation project(':iceberg-common')
+    implementation project(':iceberg-kafka-connect:iceberg-kafka-connect-common')
+    implementation project(':iceberg-kafka-connect:iceberg-kafka-connect-events')
+    implementation libs.jackson.core
+    compileOnly libs.kafka.clients
+    compileOnly libs.kafka.connect.api
+    compileOnly libs.kafka.connect.json
+    implementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
+  }
+
+  test {
+    useJUnitPlatform()
+  }
+}
+
 project(':iceberg-kafka-connect:iceberg-kafka-connect') {
   dependencies {
     api project(':iceberg-api')

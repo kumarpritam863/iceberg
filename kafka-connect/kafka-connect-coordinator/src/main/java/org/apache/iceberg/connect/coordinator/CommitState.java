@@ -29,8 +29,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.channel.utils.Envelope;
+import org.apache.iceberg.Envelope;
 import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.TableReference;
@@ -48,9 +47,9 @@ public class CommitState {
     private final Map<String, AtomicBoolean> isCommitReadyMap = Maps.newHashMap();
     private long startTime;
     private UUID currentCommitId;
-    private final IcebergSinkConfig config;
+    private final CoordinatorConfig config;
 
-    public CommitState(IcebergSinkConfig config) {
+    public CommitState(CoordinatorConfig config) {
         this.config = config;
     }
 

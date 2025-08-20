@@ -44,16 +44,12 @@ import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.Envelope;
 import org.apache.iceberg.RowDelta;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.iceberg.connect.CatalogUtils;
-import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.connect.channel.utils.Envelope;
-import org.apache.iceberg.connect.channel.utils.KafkaClientFactory;
-import org.apache.iceberg.connect.channel.utils.KafkaUtils;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
@@ -66,6 +62,9 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.Tasks;
+import org.apache.iceberg.utils.CatalogUtils;
+import org.apache.iceberg.utils.KafkaClientFactory;
+import org.apache.iceberg.utils.KafkaUtils;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -88,7 +87,7 @@ class Coordinator {
     private static final Duration POLL_DURATION = Duration.ofSeconds(1);
 
     private final Catalog catalog;
-    private final IcebergSinkConfig config;
+    private final CoordinatorConfig config;
     private final ExecutorService exec;
     private final CommitState commitState;
     private final Producer<String, byte[]> controlProducer;
@@ -101,7 +100,7 @@ class Coordinator {
     private final Map<String, Integer> memberMap = Maps.newHashMap();
     private final KafkaClientFactory clientFactory;
 
-    Coordinator(IcebergSinkConfig config) {
+    Coordinator(CoordinatorConfig config) {
         this.controlTopic = config.controlTopic();
         this.catalog = CatalogUtils.loadCatalog(config);
         this.config = config;
@@ -266,7 +265,7 @@ class Coordinator {
 
         Event event =
                 new Event(
-                        config.connectGroupId(),
+                        config.coordinatorId(),
                         new CommitComplete(commitState.currentCommitId(), validThroughTs));
         send(event);
 
@@ -309,9 +308,7 @@ class Coordinator {
             return;
         }
 
-        String branch = config.tableConfig(tableIdentifier.toString()).commitBranch();
-
-        Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(connectGroupId, table, branch);
+        Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(connectGroupId, table, null);
 
         List<DataWritten> payloads =
                 envelopeList.stream()
@@ -344,9 +341,9 @@ class Coordinator {
         } else {
             if (deleteFiles.isEmpty()) {
                 AppendFiles appendOp = table.newAppend();
-                if (branch != null) {
+/*                if (branch != null) {
                     appendOp.toBranch(branch);
-                }
+                }*/
                 appendOp.set(String.format(
                         "kafka.connect.offsets.%s.%s", controlTopic, connectGroupId), offsetsJson);
                 appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
@@ -357,9 +354,9 @@ class Coordinator {
                 appendOp.commit();
             } else {
                 RowDelta deltaOp = table.newRowDelta();
-                if (branch != null) {
+/*                if (branch != null) {
                     deltaOp.toBranch(branch);
-                }
+                }*/
                 deltaOp.set(String.format(
                         "kafka.connect.offsets.%s.%s", controlTopic, connectGroupId), offsetsJson);
                 deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
@@ -371,10 +368,10 @@ class Coordinator {
                 deltaOp.commit();
             }
 
-            Long snapshotId = latestSnapshot(table, branch).snapshotId();
+            Long snapshotId = latestSnapshot(table, null).snapshotId();
             Event event =
                     new Event(
-                            config.connectGroupId(),
+                            config.coordinatorId(),
                             new CommitToTable(
                                     commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
             send(event);

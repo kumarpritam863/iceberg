@@ -195,7 +195,12 @@ if (kafkaVersions.contains("3")) {
   project(":iceberg-kafka-connect:kafka-connect-transforms").projectDir = file('kafka-connect/kafka-connect-transforms')
   project(":iceberg-kafka-connect:kafka-connect-transforms").name = "iceberg-kafka-connect-transforms"
 
-  include 'kafka-connect-coordinator'
-  project(":kafka-connect-coordinator").name = 'iceberg-kafka-connect-coordinator'
+  include ":iceberg-kafka-connect:kafka-connect-common"
+  project(":iceberg-kafka-connect:kafka-connect-common").projectDir = file('kafka-connect/kafka-connect-common')
+  project(":iceberg-kafka-connect:kafka-connect-common").name = "iceberg-kafka-connect-common"
+
+  include ":iceberg-kafka-connect:kafka-connect-coordinator"
+  project(":iceberg-kafka-connect:kafka-connect-coordinator").projectDir = file('kafka-connect/kafka-connect-coordinator')
+  project(":iceberg-kafka-connect:kafka-connect-coordinator").name = "iceberg-kafka-connect-coordinator"
 
 }
