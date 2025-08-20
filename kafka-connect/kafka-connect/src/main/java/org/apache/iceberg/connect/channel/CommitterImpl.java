@@ -125,6 +125,7 @@ public class CommitterImpl implements Committer {
       LOG.info("Committer received leader partition. Starting Coordinator.");
       startCoordinator();
     }
+    startWorker();
   }
 
   @Override
@@ -152,6 +153,9 @@ public class CommitterImpl implements Committer {
       return;
     }
 
+    // Starting a new worker only if task is not stopped.
+    startWorker();
+
     // Normal close: if leader partition is lost, stop coordinator.
     if (hasLeaderPartition(closedPartitions)) {
       LOG.info(
@@ -172,7 +176,6 @@ public class CommitterImpl implements Committer {
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
-      startWorker();
       worker.save(sinkRecords);
     }
     processControlEvents();
