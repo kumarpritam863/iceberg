@@ -121,6 +121,7 @@ public class CommitterImpl implements Committer {
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
+    startWorker();
     if (hasLeaderPartition(addedPartitions)) {
       LOG.info("Committer received leader partition. Starting Coordinator.");
       startCoordinator();
@@ -167,12 +168,14 @@ public class CommitterImpl implements Committer {
         config.connectorName(),
         config.taskId());
     KafkaUtils.seekToLastCommittedOffsets(context);
+
+    // Starting a new worker as task has not been stopped.
+    startWorker();
   }
 
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
-      startWorker();
       worker.save(sinkRecords);
     }
     processControlEvents();
