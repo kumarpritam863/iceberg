@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: iceberg-connect-operator
+  namespace: iceberg-system
+  labels:
+    app: iceberg-connect-operator
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: iceberg-connect-operator
+  labels:
+    app: iceberg-connect-operator
+rules:
+# Custom Resource permissions
+- apiGroups: ["kafka.iceberg.apache.org"]
+  resources: ["icebergconnects"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["kafka.iceberg.apache.org"]
+  resources: ["icebergconnects/status"]
+  verbs: ["get", "update", "patch"]
+
+# Core Kubernetes resource permissions
+- apiGroups: [""]
+  resources: ["configmaps", "services", "pods"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Events permissions for logging
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+# Permissions to read secrets (for S3 credentials)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: iceberg-connect-operator
+  labels:
+    app: iceberg-connect-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: iceberg-connect-operator
+subjects:
+- kind: ServiceAccount
+  name: iceberg-connect-operator
+  namespace: iceberg-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-connect-operator
+  namespace: iceberg-system
+  labels:
+    app: iceberg-connect-operator
+    component: operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iceberg-connect-operator
+      component: operator
+  template:
+    metadata:
+      labels:
+        app: iceberg-connect-operator
+        component: operator
+    spec:
+      serviceAccountName: iceberg-connect-operator
+      containers:
+      - name: operator
+        image: iceberg-connect-operator:latest
+        env:
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        volumeMounts:
+        - name: docker-socket
+          mountPath: /var/run/docker.sock
+          readOnly: false
+      volumes:
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg-connect-operator
+  namespace: iceberg-system
+  labels:
+    app: iceberg-connect-operator
+spec:
+  selector:
+    app: iceberg-connect-operator
+    component: operator
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: metrics
+    protocol: TCP
+  type: ClusterIP

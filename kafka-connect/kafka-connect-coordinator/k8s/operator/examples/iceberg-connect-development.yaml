@@ -1,0 +1,64 @@
+apiVersion: kafka.iceberg.apache.org/v1
+kind: IcebergConnect
+metadata:
+  name: dev-iceberg-job
+  namespace: development
+spec:
+  # S3 Configuration for downloading images
+  s3Config:
+    region: "us-east-1"
+    bucket: "dev-iceberg-images"
+    accessKeyId: "AKIAIOSFODNN7EXAMPLE"
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+  # Image locations in S3
+  images:
+    worker:
+      s3Path: "images/kafka-connect-worker-dev.tar"
+      tag: "dev"
+      registry: "localhost:5000"
+    coordinator:
+      s3Path: "images/iceberg-job-manager-dev.tar"
+      tag: "dev"
+      registry: "localhost:5000"
+
+  # Worker Configuration
+  worker:
+    replicas: 1
+    clusterName: "dev-workers"
+    namespace: "development"
+
+    # Kafka Configuration
+    kafka:
+      bootstrapServers: "localhost:9092"
+
+    # Minimal resource configuration for development
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+
+  # Coordinator Configuration
+  coordinator:
+    replicas: 1
+    namespace: "development"
+
+    # Job-specific Configuration
+    job:
+      controlTopic: "iceberg-control-dev"
+      groupId: "dev-iceberg-job"
+      catalogProperties:
+        type: "memory"
+        warehouse: "/tmp/iceberg-warehouse"
+
+    # Minimal resource configuration
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"

@@ -1,0 +1,350 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-connect-worker-config
+  namespace: default
+data:
+  # Kafka Connect Worker Configuration
+  bootstrap.servers: "kafka:9092"
+  group.id: "connect-cluster"
+  key.converter: "org.apache.kafka.connect.json.JsonConverter"
+  value.converter: "org.apache.kafka.connect.json.JsonConverter"
+  key.converter.schemas.enable: "false"
+  value.converter.schemas.enable: "false"
+  offset.storage.topic: "connect-offsets"
+  offset.storage.replication.factor: "1"
+  offset.storage.partitions: "25"
+  config.storage.topic: "connect-configs"
+  config.storage.replication.factor: "1"
+  status.storage.topic: "connect-status"
+  status.storage.replication.factor: "1"
+  status.storage.partitions: "5"
+  plugin.path: "/usr/share/java,/usr/share/confluent-hub-components"
+
+  # REST API Configuration
+  rest.port: "8083"
+  rest.advertised.host.name: ""
+  rest.advertised.port: "8083"
+
+  # Security Configuration (if needed)
+  # security.protocol: "PLAINTEXT"
+  # sasl.mechanism: "PLAIN"
+  # sasl.jaas.config: ""
+
+  # Worker Performance Tuning
+  offset.flush.interval.ms: "10000"
+  offset.flush.timeout.ms: "5000"
+  task.shutdown.graceful.timeout.ms: "10000"
+
+  # Producer Configuration
+  producer.bootstrap.servers: "kafka:9092"
+  producer.key.serializer: "org.apache.kafka.common.serialization.ByteArraySerializer"
+  producer.value.serializer: "org.apache.kafka.common.serialization.ByteArraySerializer"
+  producer.acks: "all"
+  producer.retries: "2147483647"
+  producer.enable.idempotence: "true"
+  producer.max.in.flight.requests.per.connection: "1"
+
+  # Consumer Configuration
+  consumer.bootstrap.servers: "kafka:9092"
+  consumer.key.deserializer: "org.apache.kafka.common.serialization.ByteArrayDeserializer"
+  consumer.value.deserializer: "org.apache.kafka.common.serialization.ByteArrayDeserializer"
+  consumer.auto.offset.reset: "earliest"
+  consumer.enable.auto.commit: "false"
+  consumer.isolation.level: "read_committed"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect-workers
+  namespace: default
+  labels:
+    app: kafka-connect-workers
+    component: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kafka-connect-workers
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: kafka-connect-workers
+        component: worker
+    spec:
+      containers:
+      - name: connect-worker
+        image: confluentinc/cp-kafka-connect:latest
+        ports:
+        - containerPort: 8083
+          name: rest-api
+        env:
+        # Basic Kafka Connect Configuration
+        - name: CONNECT_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: bootstrap.servers
+        - name: CONNECT_GROUP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: group.id
+        - name: CONNECT_KEY_CONVERTER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: key.converter
+        - name: CONNECT_VALUE_CONVERTER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: value.converter
+        - name: CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: key.converter.schemas.enable
+        - name: CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: value.converter.schemas.enable
+
+        # Storage Configuration
+        - name: CONNECT_OFFSET_STORAGE_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: offset.storage.topic
+        - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: offset.storage.replication.factor
+        - name: CONNECT_OFFSET_STORAGE_PARTITIONS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: offset.storage.partitions
+        - name: CONNECT_CONFIG_STORAGE_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: config.storage.topic
+        - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: config.storage.replication.factor
+        - name: CONNECT_STATUS_STORAGE_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: status.storage.topic
+        - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: status.storage.replication.factor
+        - name: CONNECT_STATUS_STORAGE_PARTITIONS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: status.storage.partitions
+
+        # Plugin and REST Configuration
+        - name: CONNECT_PLUGIN_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: plugin.path
+        - name: CONNECT_REST_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: rest.port
+        - name: CONNECT_REST_ADVERTISED_HOST_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: CONNECT_REST_ADVERTISED_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: rest.advertised.port
+
+        # Performance Configuration
+        - name: CONNECT_OFFSET_FLUSH_INTERVAL_MS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: offset.flush.interval.ms
+        - name: CONNECT_OFFSET_FLUSH_TIMEOUT_MS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: offset.flush.timeout.ms
+        - name: CONNECT_TASK_SHUTDOWN_GRACEFUL_TIMEOUT_MS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: task.shutdown.graceful.timeout.ms
+
+        # Producer Configuration for Exactly-Once Semantics
+        - name: CONNECT_PRODUCER_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.bootstrap.servers
+        - name: CONNECT_PRODUCER_KEY_SERIALIZER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.key.serializer
+        - name: CONNECT_PRODUCER_VALUE_SERIALIZER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.value.serializer
+        - name: CONNECT_PRODUCER_ACKS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.acks
+        - name: CONNECT_PRODUCER_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.retries
+        - name: CONNECT_PRODUCER_ENABLE_IDEMPOTENCE
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.enable.idempotence
+        - name: CONNECT_PRODUCER_MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: producer.max.in.flight.requests.per.connection
+
+        # Consumer Configuration for Exactly-Once Semantics
+        - name: CONNECT_CONSUMER_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.bootstrap.servers
+        - name: CONNECT_CONSUMER_KEY_DESERIALIZER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.key.deserializer
+        - name: CONNECT_CONSUMER_VALUE_DESERIALIZER
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.value.deserializer
+        - name: CONNECT_CONSUMER_AUTO_OFFSET_RESET
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.auto.offset.reset
+        - name: CONNECT_CONSUMER_ENABLE_AUTO_COMMIT
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.enable.auto.commit
+        - name: CONNECT_CONSUMER_ISOLATION_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-connect-worker-config
+              key: consumer.isolation.level
+
+        volumeMounts:
+        - name: iceberg-connector
+          mountPath: /usr/share/confluent-hub-components/iceberg-kafka-connect
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8083
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8083
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+      volumes:
+      - name: iceberg-connector
+        emptyDir: {}
+        # In practice, this would be populated by an init container
+        # or mounted from a persistent volume with the Iceberg connector JAR
+
+      # Optional: Init container to download Iceberg connector
+      # initContainers:
+      # - name: download-connector
+      #   image: curlimages/curl:latest
+      #   command:
+      #   - /bin/sh
+      #   - -c
+      #   - |
+      #     CONNECTOR_VERSION=${ICEBERG_CONNECTOR_VERSION:-latest}
+      #     curl -L -o /connectors/iceberg-kafka-connect.jar \
+      #       "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-kafka-connect-runtime/${CONNECTOR_VERSION}/iceberg-kafka-connect-runtime-${CONNECTOR_VERSION}.jar"
+      #   volumeMounts:
+      #   - name: iceberg-connector
+      #     mountPath: /connectors
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect-service
+  namespace: default
+  labels:
+    app: kafka-connect-workers
+spec:
+  selector:
+    app: kafka-connect-workers
+    component: worker
+  ports:
+  - port: 8083
+    targetPort: 8083
+    name: rest-api
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect-headless
+  namespace: default
+  labels:
+    app: kafka-connect-workers
+spec:
+  selector:
+    app: kafka-connect-workers
+    component: worker
+  ports:
+  - port: 8083
+    targetPort: 8083
+    name: rest-api
+    protocol: TCP
+  clusterIP: None
+  type: ClusterIP

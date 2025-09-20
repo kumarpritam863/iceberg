@@ -1,0 +1,98 @@
+apiVersion: kafka.iceberg.apache.org/v1
+kind: IcebergConnect
+metadata:
+  name: my-iceberg-job
+  namespace: default
+spec:
+  # S3 Configuration for downloading images
+  s3Config:
+    region: "us-west-2"
+    bucket: "my-iceberg-images"
+    accessKeyId: "AKIAIOSFODNN7EXAMPLE"
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    # Optional: Custom S3 endpoint (for MinIO, LocalStack, etc.)
+    # endpoint: "http://minio.example.com:9000"
+
+  # Image locations in S3
+  images:
+    worker:
+      s3Path: "images/kafka-connect-worker-v1.0.0.tar"
+      tag: "v1.0.0"
+      registry: "my-registry.example.com"
+    coordinator:
+      s3Path: "images/iceberg-job-manager-v1.0.0.tar"
+      tag: "v1.0.0"
+      registry: "my-registry.example.com"
+
+  # Worker Configuration
+  worker:
+    replicas: 3
+    clusterName: "production-workers"
+    namespace: "kafka-connect"
+
+    # Kafka Configuration
+    kafka:
+      bootstrapServers: "kafka-1:9092,kafka-2:9092,kafka-3:9092"
+      securityProtocol: "SASL_SSL"
+      saslMechanism: "SCRAM-SHA-256"
+      saslJaasConfig: |
+        org.apache.kafka.common.security.scram.ScramLoginModule required
+        username="connect-user"
+        password="connect-password";
+
+    # Storage Topics Configuration
+    storage:
+      offsetTopic: "connect-offsets-prod"
+      offsetReplicationFactor: 3
+      offsetPartitions: 50
+      configTopic: "connect-configs-prod"
+      configReplicationFactor: 3
+      statusTopic: "connect-status-prod"
+      statusReplicationFactor: 3
+      statusPartitions: 10
+
+    # Resource Configuration
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+
+    # Performance Tuning
+    performance:
+      offsetFlushIntervalMs: 5000
+      offsetFlushTimeoutMs: 2000
+      taskShutdownTimeoutMs: 15000
+
+  # Coordinator Configuration
+  coordinator:
+    replicas: 1
+    namespace: "kafka-connect"
+
+    # Job-specific Configuration
+    job:
+      controlTopic: "iceberg-control-my-job"
+      groupId: "my-iceberg-job-group"
+      catalogProperties:
+        type: "hive"
+        uri: "thrift://hive-metastore:9083"
+        warehouse: "s3a://data-lake/warehouse/"
+        io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+        s3.endpoint: "https://s3.us-west-2.amazonaws.com"
+
+    # Kafka Configuration (inherits from worker, can override)
+    kafka:
+      bootstrapServers: "kafka-1:9092,kafka-2:9092,kafka-3:9092"
+      enableTransactions: true
+      transactionTimeoutMs: 300000
+
+    # Resource Configuration
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"

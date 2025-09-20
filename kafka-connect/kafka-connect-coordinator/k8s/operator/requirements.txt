@@ -1,0 +1,4 @@
+kubernetes>=28.1.0
+boto3>=1.34.0
+PyYAML>=6.0.1
+asyncio-mqtt>=0.16.1

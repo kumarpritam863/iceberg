@@ -105,7 +105,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   public static final String COMMITTER_IMPL_DOC =
       "config to override the default committer implementation";
   public static final String COMMITTER_IMPL_DEFAULT =
-      "org.apache.iceberg.connect.channel.CommitterImpl";
+      "org.apache.iceberg.connect.channel.CommitterImplV2";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
   public static final int CREATE_TABLE_RETRIES = 2; // 3 total attempts

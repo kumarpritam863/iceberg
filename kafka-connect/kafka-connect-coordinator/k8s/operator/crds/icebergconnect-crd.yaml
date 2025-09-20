@@ -1,0 +1,326 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: icebergconnects.kafka.iceberg.apache.org
+  labels:
+    app: iceberg-kafka-connect-operator
+spec:
+  group: kafka.iceberg.apache.org
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              # S3 Configuration for Image Downloads
+              s3Config:
+                type: object
+                properties:
+                  region:
+                    type: string
+                    description: "AWS S3 region"
+                  bucket:
+                    type: string
+                    description: "S3 bucket containing images"
+                  accessKeyId:
+                    type: string
+                    description: "AWS Access Key ID"
+                  secretAccessKey:
+                    type: string
+                    description: "AWS Secret Access Key"
+                  endpoint:
+                    type: string
+                    description: "Custom S3 endpoint (optional)"
+                required:
+                - region
+                - bucket
+                - accessKeyId
+                - secretAccessKey
+
+              # Image Configuration
+              images:
+                type: object
+                properties:
+                  worker:
+                    type: object
+                    properties:
+                      s3Path:
+                        type: string
+                        description: "S3 path to worker image tar/container"
+                      tag:
+                        type: string
+                        description: "Target image tag"
+                        default: "latest"
+                      registry:
+                        type: string
+                        description: "Target registry to push image"
+                        default: "localhost:5000"
+                    required:
+                    - s3Path
+                  coordinator:
+                    type: object
+                    properties:
+                      s3Path:
+                        type: string
+                        description: "S3 path to coordinator image tar/container"
+                      tag:
+                        type: string
+                        description: "Target image tag"
+                        default: "latest"
+                      registry:
+                        type: string
+                        description: "Target registry to push image"
+                        default: "localhost:5000"
+                    required:
+                    - s3Path
+                required:
+                - worker
+                - coordinator
+
+              # Worker Configuration
+              worker:
+                type: object
+                properties:
+                  replicas:
+                    type: integer
+                    minimum: 1
+                    default: 3
+                  clusterName:
+                    type: string
+                    description: "Unique worker cluster identifier"
+                  namespace:
+                    type: string
+                    default: "default"
+
+                  # Kafka Configuration
+                  kafka:
+                    type: object
+                    properties:
+                      bootstrapServers:
+                        type: string
+                        description: "Kafka bootstrap servers"
+                      securityProtocol:
+                        type: string
+                        default: "PLAINTEXT"
+                        enum: ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
+                      saslMechanism:
+                        type: string
+                        enum: ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"]
+                      saslJaasConfig:
+                        type: string
+                    required:
+                    - bootstrapServers
+
+                  # Storage Topics
+                  storage:
+                    type: object
+                    properties:
+                      offsetTopic:
+                        type: string
+                        default: "connect-offsets"
+                      offsetReplicationFactor:
+                        type: integer
+                        default: 1
+                      offsetPartitions:
+                        type: integer
+                        default: 25
+                      configTopic:
+                        type: string
+                        default: "connect-configs"
+                      configReplicationFactor:
+                        type: integer
+                        default: 1
+                      statusTopic:
+                        type: string
+                        default: "connect-status"
+                      statusReplicationFactor:
+                        type: integer
+                        default: 1
+                      statusPartitions:
+                        type: integer
+                        default: 5
+
+                  # Resource Configuration
+                  resources:
+                    type: object
+                    properties:
+                      requests:
+                        type: object
+                        properties:
+                          memory:
+                            type: string
+                            default: "1Gi"
+                          cpu:
+                            type: string
+                            default: "500m"
+                      limits:
+                        type: object
+                        properties:
+                          memory:
+                            type: string
+                            default: "2Gi"
+                          cpu:
+                            type: string
+                            default: "1000m"
+
+                  # Performance Tuning
+                  performance:
+                    type: object
+                    properties:
+                      offsetFlushIntervalMs:
+                        type: integer
+                        default: 10000
+                      offsetFlushTimeoutMs:
+                        type: integer
+                        default: 5000
+                      taskShutdownTimeoutMs:
+                        type: integer
+                        default: 10000
+
+                required:
+                - kafka
+
+              # Coordinator Configuration
+              coordinator:
+                type: object
+                properties:
+                  replicas:
+                    type: integer
+                    minimum: 1
+                    default: 1
+                  namespace:
+                    type: string
+                    default: "default"
+
+                  # Job Configuration
+                  job:
+                    type: object
+                    properties:
+                      controlTopic:
+                        type: string
+                        description: "Control topic for this job"
+                      groupId:
+                        type: string
+                        description: "Connect group ID for this job"
+                      catalogProperties:
+                        type: object
+                        additionalProperties:
+                          type: string
+                        description: "Iceberg catalog properties"
+                    required:
+                    - controlTopic
+                    - groupId
+                    - catalogProperties
+
+                  # Kafka Configuration (inherits from worker but can override)
+                  kafka:
+                    type: object
+                    properties:
+                      bootstrapServers:
+                        type: string
+                      securityProtocol:
+                        type: string
+                        default: "PLAINTEXT"
+                      saslMechanism:
+                        type: string
+                      saslJaasConfig:
+                        type: string
+                      enableTransactions:
+                        type: boolean
+                        default: true
+                      transactionTimeoutMs:
+                        type: integer
+                        default: 300000
+
+                  # Resource Configuration
+                  resources:
+                    type: object
+                    properties:
+                      requests:
+                        type: object
+                        properties:
+                          memory:
+                            type: string
+                            default: "512Mi"
+                          cpu:
+                            type: string
+                            default: "250m"
+                      limits:
+                        type: object
+                        properties:
+                          memory:
+                            type: string
+                            default: "1Gi"
+                          cpu:
+                            type: string
+                            default: "500m"
+
+                required:
+                - job
+
+            required:
+            - s3Config
+            - images
+            - worker
+            - coordinator
+
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: ["Pending", "Downloading", "Building", "Deploying", "Ready", "Failed"]
+                description: "Current phase of deployment"
+              message:
+                type: string
+                description: "Human readable message about the current state"
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                      enum: ["True", "False", "Unknown"]
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    message:
+                      type: string
+              workerStatus:
+                type: object
+                properties:
+                  ready:
+                    type: integer
+                  desired:
+                    type: integer
+                  image:
+                    type: string
+              coordinatorStatus:
+                type: object
+                properties:
+                  ready:
+                    type: integer
+                  desired:
+                    type: integer
+                  image:
+                    type: string
+    subresources:
+      status: {}
+
+  scope: Namespaced
+  names:
+    plural: icebergconnects
+    singular: icebergconnect
+    kind: IcebergConnect
+    shortNames:
+    - ibc

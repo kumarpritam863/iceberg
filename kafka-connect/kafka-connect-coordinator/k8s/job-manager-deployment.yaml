@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iceberg-job-config
+  namespace: default
+data:
+  # Kafka Configuration
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+
+  # Job Configuration
+  CONNECT_GROUP_ID: "iceberg-connect-group"
+  CONTROL_TOPIC: "iceberg-control-topic"
+
+  # Catalog Configuration
+  CATALOG_NAME: "iceberg_catalog"
+  CATALOG_CATALOG_IMPL: "org.apache.iceberg.jdbc.JdbcCatalog"
+  CATALOG_URI: "jdbc:postgresql://postgres:5432/iceberg"
+  CATALOG_JDBC_USER: "iceberg"
+  CATALOG_JDBC_PASSWORD: "password"
+  CATALOG_WAREHOUSE: "s3://iceberg-warehouse/"
+
+  # Coordinator Configuration
+  COMMIT_INTERVAL_MINUTES: "5"
+  COMMIT_TIMEOUT_MINUTES: "30"
+  COMMIT_THREADS: "4"
+  KEEPALIVE_TIMEOUT_MS: "60000"
+
+  # Transaction Configuration
+  ENABLE_TRANSACTIONS: "true"
+  TRANSACTION_TIMEOUT_MINUTES: "15"
+  # TRANSACTIONAL_ID: "iceberg-coordinator-${JOB_ID}" # Auto-generated if not set
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-job-manager
+  namespace: default
+  labels:
+    app: iceberg-job-manager
+    component: coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iceberg-job-manager
+      component: coordinator
+  template:
+    metadata:
+      labels:
+        app: iceberg-job-manager
+        component: coordinator
+    spec:
+      containers:
+      - name: job-manager
+        image: iceberg/kafka-connect-coordinator:latest
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - configMapRef:
+            name: iceberg-job-config
+        ports:
+        - containerPort: 8080
+          name: metrics
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep '[I]cebergJobManagerApplication' | wc -l | grep -q 1"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep '[I]cebergJobManagerApplication' | wc -l | grep -q 1"
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg-job-manager-service
+  namespace: default
+  labels:
+    app: iceberg-job-manager
+spec:
+  selector:
+    app: iceberg-job-manager
+    component: coordinator
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: metrics
+  type: ClusterIP
