@@ -48,6 +48,11 @@ project(':iceberg-kafka-connect:iceberg-kafka-connect') {
     compileOnly libs.kafka.connect.api
     compileOnly libs.kafka.connect.json
 
+    // Kubernetes client dependencies for coordinator deployment
+    implementation 'io.kubernetes:client-java:18.0.1'
+    implementation 'io.kubernetes:client-java-api:18.0.1'
+    implementation 'io.kubernetes:client-java-extended:18.0.1'
+
     testImplementation libs.hadoop3.client
     testRuntimeOnly project(':iceberg-parquet')
     testRuntimeOnly project(':iceberg-orc')
@@ -94,6 +99,7 @@ project(':iceberg-kafka-connect:iceberg-kafka-connect-runtime') {
   dependencies {
     implementation project(':iceberg-kafka-connect:iceberg-kafka-connect')
     implementation project(':iceberg-kafka-connect:iceberg-kafka-connect-transforms')
+    implementation project(':iceberg-kafka-connect:iceberg-kafka-connect-coordinator')
     implementation(libs.hadoop3.common) {
       exclude group: 'log4j'
       exclude group: 'org.slf4j'
@@ -280,6 +286,11 @@ project(':iceberg-kafka-connect:iceberg-kafka-connect-coordinator') {
 
     implementation libs.kafka.clients
     implementation libs.slf4j.api
+
+    // Kubernetes client dependencies for leader election
+    implementation 'io.kubernetes:client-java:18.0.1'
+    implementation 'io.kubernetes:client-java-api:18.0.1'
+    implementation 'io.kubernetes:client-java-extended:18.0.1'
 
     testImplementation libs.junit.jupiter
     testImplementation libs.junit.jupiter.engine
