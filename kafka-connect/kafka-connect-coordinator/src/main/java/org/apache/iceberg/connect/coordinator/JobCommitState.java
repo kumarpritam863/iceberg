@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
@@ -39,17 +39,15 @@ import org.apache.iceberg.connect.events.TableReference;
 public class JobCommitState {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
-  private static final AtomicLong COMMIT_ID_GENERATOR = new AtomicLong(System.currentTimeMillis());
-
   private final String connectGroupId;
   private final Duration commitInterval;
   private final Duration commitTimeout;
 
   private OffsetDateTime lastCommitTime;
   private OffsetDateTime currentCommitStartTime;
-  private long currentCommitId;
-  private final List<Event> dataWrittenEvents;
-  private final List<Event> dataCompleteEvents;
+  private UUID currentCommitId;
+  private final List<Envelope> dataWrittenEnvelopes;
+  private final List<Envelope> dataCompleteEnvelopes;
   private boolean commitInProgress;
 
   public JobCommitState(String connectGroupId, Duration commitInterval) {
@@ -57,8 +55,8 @@ public class JobCommitState {
     this.commitInterval = commitInterval;
     this.commitTimeout = Duration.ofMinutes(30); // TODO: make configurable
     this.lastCommitTime = OffsetDateTime.now();
-    this.dataWrittenEvents = new ArrayList<>();
-    this.dataCompleteEvents = new ArrayList<>();
+    this.dataWrittenEnvelopes = new ArrayList<>();
+    this.dataCompleteEnvelopes = new ArrayList<>();
     this.commitInProgress = false;
   }
 
@@ -77,37 +75,37 @@ public class JobCommitState {
   }
 
   public synchronized void startNewCommit() {
-    this.currentCommitId = COMMIT_ID_GENERATOR.incrementAndGet();
+    this.currentCommitId = UUID.randomUUID();
     this.currentCommitStartTime = OffsetDateTime.now();
     this.commitInProgress = true;
-    this.dataWrittenEvents.clear();
-    this.dataCompleteEvents.clear();
+    this.dataWrittenEnvelopes.clear();
+    this.dataCompleteEnvelopes.clear();
   }
 
-  public synchronized void addDataWritten(Event event) {
+  public synchronized void addDataWritten(Envelope envelope) {
     if (commitInProgress) {
-      dataWrittenEvents.add(event);
+      dataWrittenEnvelopes.add(envelope);
     }
   }
 
-  public synchronized void addDataComplete(Event event) {
+  public synchronized void addDataComplete(Envelope envelope) {
     if (commitInProgress) {
-      dataCompleteEvents.add(event);
+      dataCompleteEnvelopes.add(envelope);
     }
   }
 
   public synchronized boolean isCommitReady() {
-    return commitInProgress && !dataCompleteEvents.isEmpty();
+    return commitInProgress && !dataCompleteEnvelopes.isEmpty();
   }
 
-  public synchronized Map<TableReference, List<DataWritten>> getTableCommitMap() {
-    Map<TableReference, List<DataWritten>> commitMap = new HashMap<>();
+  public synchronized Map<TableReference, List<Envelope>> getTableCommitMap() {
+    Map<TableReference, List<Envelope>> commitMap = new HashMap<>();
 
-    for (Event event : dataWrittenEvents) {
-      if (event.payload() instanceof DataWritten) {
-        DataWritten dataWritten = (DataWritten) event.payload();
+    for (Envelope envelope : dataWrittenEnvelopes) {
+      if (envelope.event().payload() instanceof DataWritten) {
+        DataWritten dataWritten = (DataWritten) envelope.event().payload();
         TableReference tableRef = dataWritten.tableReference();
-        commitMap.computeIfAbsent(tableRef, k -> new ArrayList<>()).add(dataWritten);
+        commitMap.computeIfAbsent(tableRef, k -> new ArrayList<>()).add(envelope);
       }
     }
 
@@ -117,8 +115,10 @@ public class JobCommitState {
   public synchronized String getOffsetsJson() {
     try {
       Map<Integer, Long> offsets = new HashMap<>();
-      // Extract offsets from events - this would need to be implemented
-      // based on the actual offset tracking mechanism
+      // Extract offsets from envelopes
+      for (Envelope envelope : dataWrittenEnvelopes) {
+        offsets.put(envelope.partition(), envelope.offset());
+      }
       return MAPPER.writeValueAsString(offsets);
     } catch (JsonProcessingException e) {
       throw new RuntimeException("Failed to serialize offsets", e);
@@ -135,11 +135,11 @@ public class JobCommitState {
   public synchronized void clearCommit() {
     this.commitInProgress = false;
     this.lastCommitTime = OffsetDateTime.now();
-    this.dataWrittenEvents.clear();
-    this.dataCompleteEvents.clear();
+    this.dataWrittenEnvelopes.clear();
+    this.dataCompleteEnvelopes.clear();
   }
 
-  public synchronized long getCurrentCommitId() {
+  public synchronized UUID getCurrentCommitId() {
     return currentCommitId;
   }
 

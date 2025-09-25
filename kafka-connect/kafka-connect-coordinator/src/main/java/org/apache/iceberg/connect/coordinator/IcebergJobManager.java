@@ -43,6 +43,7 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
@@ -79,7 +80,7 @@ public class IcebergJobManager {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
   private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";
-  private static final Duration POLL_DURATION = Duration.ofMillis(1000);
+  private static final Duration POLL_DURATION = Duration.ofSeconds(1);
 
   private final IcebergJobConfig jobConfig;
   private final Catalog catalog;
@@ -206,9 +207,11 @@ public class IcebergJobManager {
       boolean hasRelevantEvents = false;
       for (ConsumerRecord<byte[], byte[]> record : records) {
         try {
-          Event event = Event.decode(record.value());
+          Event event = AvroUtil.decode(record.value());
           if (shouldProcessEvent(event)) {
-            handleEvent(event);
+            // TODO: Pass the actual record partition and offset to handleEvent
+            // Currently using placeholder values, but this needs proper record tracking
+            handleEventWithRecord(event, record.partition(), record.offset());
             hasRelevantEvents = true;
           }
         } catch (Exception e) {
@@ -238,9 +241,9 @@ public class IcebergJobManager {
     ConsumerRecords<byte[], byte[]> records = consumer.poll(POLL_DURATION);
     for (ConsumerRecord<byte[], byte[]> record : records) {
       try {
-        Event event = Event.decode(record.value());
+        Event event = AvroUtil.decode(record.value());
         if (shouldProcessEvent(event)) {
-          handleEvent(event);
+          handleEventWithRecord(event, record.partition(), record.offset());
         }
       } catch (Exception e) {
         LOG.error("Error processing event from topic {} partition {} offset {}",
@@ -289,7 +292,7 @@ public class IcebergJobManager {
   }
 
   private boolean shouldProcessEvent(Event event) {
-    return jobConfig.connectGroupId().equals(event.connectGroupId());
+    return jobConfig.connectGroupId().equals(event.groupId());
   }
 
   private void processCommitInterval() {
@@ -317,13 +320,15 @@ public class IcebergJobManager {
     LOG.info("Started commit {} for job {}", commitState.getCurrentCommitId(), jobConfig.jobId());
   }
 
-  private void handleEvent(Event event) {
+  private void handleEventWithRecord(Event event, int partition, long offset) {
     switch (event.payload().type()) {
       case DATA_WRITTEN:
-        commitState.addDataWritten(event);
+        Envelope dataWrittenEnvelope = new Envelope(event, partition, offset);
+        commitState.addDataWritten(dataWrittenEnvelope);
         break;
       case DATA_COMPLETE:
-        commitState.addDataComplete(event);
+        Envelope dataCompleteEnvelope = new Envelope(event, partition, offset);
+        commitState.addDataComplete(dataCompleteEnvelope);
         if (commitState.isCommitReady()) {
           try {
             performCommit(false);
@@ -340,14 +345,14 @@ public class IcebergJobManager {
   }
 
   private void performCommit(boolean partialCommit) {
-    Map<TableReference, List<DataWritten>> commitMap = commitState.getTableCommitMap();
+    Map<TableReference, List<Envelope>> commitMap = commitState.getTableCommitMap();
     String offsetsJson = commitState.getOffsetsJson();
     OffsetDateTime validThroughTs = commitState.getValidThroughTimestamp(partialCommit);
 
     commitToTables(commitMap, offsetsJson, validThroughTs);
   }
 
-  private void commitToTables(Map<TableReference, List<DataWritten>> commitMap,
+  private void commitToTables(Map<TableReference, List<Envelope>> commitMap,
                               String offsetsJson, OffsetDateTime validThroughTs) {
     if (transactionsEnabled) {
       commitToTablesTransactionally(commitMap, offsetsJson, validThroughTs);
@@ -356,7 +361,7 @@ public class IcebergJobManager {
     }
   }
 
-  private void commitToTablesTransactionally(Map<TableReference, List<DataWritten>> commitMap,
+  private void commitToTablesTransactionally(Map<TableReference, List<Envelope>> commitMap,
                                            String offsetsJson, OffsetDateTime validThroughTs) {
     try {
       beginTransactionIfNeeded();
@@ -365,9 +370,7 @@ public class IcebergJobManager {
       Tasks.foreach(commitMap.entrySet())
           .executeWith(commitExecutor)
           .stopOnFailure()
-          .run(entry -> {
-            commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-          });
+          .run(entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs));
 
       // Send commit complete event within the same transaction
       Event commitCompleteEvent = new Event(
@@ -388,14 +391,12 @@ public class IcebergJobManager {
     }
   }
 
-  private void commitToTablesNonTransactionally(Map<TableReference, List<DataWritten>> commitMap,
+  private void commitToTablesNonTransactionally(Map<TableReference, List<Envelope>> commitMap,
                                               String offsetsJson, OffsetDateTime validThroughTs) {
     Tasks.foreach(commitMap.entrySet())
         .executeWith(commitExecutor)
         .stopOnFailure()
-        .run(entry -> {
-          commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-        });
+        .run(entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs));
 
     Event event = new Event(
         jobConfig.connectGroupId(),
@@ -407,11 +408,10 @@ public class IcebergJobManager {
   }
 
   private void commitToTable(
-      TableReference tableReference,
-      List<DataWritten> dataWrittenList,
-      String offsetsJson,
-      OffsetDateTime validThroughTs) {
-
+          TableReference tableReference,
+          List<Envelope> envelopeList,
+          String offsetsJson,
+          OffsetDateTime validThroughTs) {
     TableIdentifier tableIdentifier = tableReference.identifier();
     Table table;
     try {
@@ -421,56 +421,91 @@ public class IcebergJobManager {
       return;
     }
 
-    Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(table);
+    // Note: In the original Coordinator, this method filtered DataWritten based on
+    // partition offsets from Envelope metadata. In this JobManager architecture,
+    // the offset filtering should be handled by the data producers (Kafka Connect tasks)
+    // before sending DataWritten events, or we need to modify the event structure
+    // to include partition/offset metadata.
+    //
+    // For now, we'll process all DataWritten events that reach the JobManager,
+    // assuming the filtering has been done upstream or is not needed in this architecture.
+    // TODO: Implement proper offset filtering if needed based on architecture requirements
 
-    List<DataFile> dataFiles = dataWrittenList.stream()
-        .filter(payload -> payload.dataFiles() != null)
-        .flatMap(payload -> payload.dataFiles().stream())
-        .filter(dataFile -> dataFile.recordCount() > 0)
-        .filter(distinctByKey(ContentFile::location))
-        .collect(Collectors.toList());
+    String branch = null; // TODO: Add table config support similar to original Coordinator
 
-    List<DeleteFile> deleteFiles = dataWrittenList.stream()
-        .filter(payload -> payload.deleteFiles() != null)
-        .flatMap(payload -> payload.deleteFiles().stream())
-        .filter(deleteFile -> deleteFile.recordCount() > 0)
-        .filter(distinctByKey(ContentFile::location))
-        .collect(Collectors.toList());
+    Map<Integer, Long> committedOffsets = lastCommittedOffsetsForTable(table, branch);
+
+    List<DataWritten> payloads =
+            envelopeList.stream()
+                    .filter(
+                            envelope -> {
+                              Long minOffset = committedOffsets.get(envelope.partition());
+                              return minOffset == null || envelope.offset() >= minOffset;
+                            })
+                    .map(envelope -> (DataWritten) envelope.event().payload())
+                    .collect(Collectors.toList());
+
+    List<DataFile> dataFiles =
+            payloads.stream()
+                    .filter(payload -> payload.dataFiles() != null)
+                    .flatMap(payload -> payload.dataFiles().stream())
+                    .filter(dataFile -> dataFile.recordCount() > 0)
+                    .filter(distinctByKey(ContentFile::location))
+                    .collect(Collectors.toList());
+
+    List<DeleteFile> deleteFiles =
+            payloads.stream()
+                    .filter(payload -> payload.deleteFiles() != null)
+                    .flatMap(payload -> payload.deleteFiles().stream())
+                    .filter(deleteFile -> deleteFile.recordCount() > 0)
+                    .filter(distinctByKey(ContentFile::location))
+                    .collect(Collectors.toList());
 
     if (dataFiles.isEmpty() && deleteFiles.isEmpty()) {
       LOG.info("Nothing to commit to table {}, skipping", tableIdentifier);
-      return;
-    }
-
-    if (deleteFiles.isEmpty()) {
-      AppendFiles appendOp = table.newAppend();
-      appendOp.set(snapshotOffsetsProp, offsetsJson);
-      appendOp.set(COMMIT_ID_SNAPSHOT_PROP, String.valueOf(commitState.getCurrentCommitId()));
-      if (validThroughTs != null) {
-        appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
-      }
-      dataFiles.forEach(appendOp::appendFile);
-      appendOp.commit();
     } else {
-      RowDelta deltaOp = table.newRowDelta();
-      deltaOp.set(snapshotOffsetsProp, offsetsJson);
-      deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, String.valueOf(commitState.getCurrentCommitId()));
-      if (validThroughTs != null) {
-        deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
+      if (deleteFiles.isEmpty()) {
+        AppendFiles appendOp = table.newAppend();
+        if (branch != null) {
+          appendOp.toBranch(branch);
+        }
+        appendOp.set(snapshotOffsetsProp, offsetsJson);
+        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.getCurrentCommitId().toString());
+        if (validThroughTs != null) {
+          appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
+        }
+        dataFiles.forEach(appendOp::appendFile);
+        appendOp.commit();
+      } else {
+        RowDelta deltaOp = table.newRowDelta();
+        if (branch != null) {
+          deltaOp.toBranch(branch);
+        }
+        deltaOp.set(snapshotOffsetsProp, offsetsJson);
+        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.getCurrentCommitId().toString());
+        if (validThroughTs != null) {
+          deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
+        }
+        dataFiles.forEach(deltaOp::addRows);
+        deleteFiles.forEach(deltaOp::addDeletes);
+        deltaOp.commit();
       }
-      dataFiles.forEach(deltaOp::addRows);
-      deleteFiles.forEach(deltaOp::addDeletes);
-      deltaOp.commit();
+
+      Long snapshotId = latestSnapshot(table, branch).snapshotId();
+      Event event =
+              new Event(
+                      jobConfig.connectGroupId(),
+                      new CommitToTable(
+                              commitState.getCurrentCommitId(), tableReference, snapshotId, validThroughTs));
+      sendEvent(event);
+
+      LOG.info(
+              "Commit complete to table {}, snapshot {}, commit ID {}, valid-through {}",
+              tableIdentifier,
+              snapshotId,
+              commitState.getCurrentCommitId(),
+              validThroughTs);
     }
-
-    Long snapshotId = table.currentSnapshot().snapshotId();
-    Event event = new Event(
-        jobConfig.connectGroupId(),
-        new CommitToTable(commitState.getCurrentCommitId(), tableReference, snapshotId, validThroughTs));
-    sendEvent(event);
-
-    LOG.info("Committed to table {}, snapshot {}, commit ID {}, valid-through {} for job {}",
-        tableIdentifier, snapshotId, commitState.getCurrentCommitId(), validThroughTs, jobConfig.jobId());
   }
 
   private <T> Predicate<T> distinctByKey(Function<? super T, ?> keyExtractor) {
@@ -478,13 +513,21 @@ public class IcebergJobManager {
     return t -> seen.putIfAbsent(keyExtractor.apply(t), Boolean.TRUE) == null;
   }
 
-  private Map<Integer, Long> lastCommittedOffsetsForTable(Table table) {
-    Snapshot snapshot = table.currentSnapshot();
+  private Snapshot latestSnapshot(Table table, String branch) {
+    if (branch == null) {
+      return table.currentSnapshot();
+    }
+    return table.snapshot(branch);
+  }
+
+  private Map<Integer, Long> lastCommittedOffsetsForTable(Table table, String branch) {
+    Snapshot snapshot = latestSnapshot(table, branch);
     while (snapshot != null) {
       Map<String, String> summary = snapshot.summary();
       String value = summary.get(snapshotOffsetsProp);
       if (value != null) {
-        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
+        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {
+        };
         try {
           return MAPPER.readValue(value, typeRef);
         } catch (IOException e) {
@@ -499,7 +542,7 @@ public class IcebergJobManager {
 
   private void sendEvent(Event event) {
     try {
-      ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(jobConfig.controlTopic(), event.encode());
+      ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(jobConfig.controlTopic(), AvroUtil.encode(event));
       producer.send(record);
     } catch (Exception e) {
       LOG.error("Failed to send event to topic {} for job {}", jobConfig.controlTopic(), jobConfig.jobId(), e);
@@ -513,7 +556,7 @@ public class IcebergJobManager {
     }
 
     try {
-      ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(jobConfig.controlTopic(), event.encode());
+      ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(jobConfig.controlTopic(), AvroUtil.encode(event));
       producer.send(record);
       LOG.debug("Sent event in transaction for job: {}", jobConfig.jobId());
     } catch (Exception e) {
@@ -575,7 +618,4 @@ public class IcebergJobManager {
     return running;
   }
 
-  public String getJobId() {
-    return jobConfig.jobId();
-  }
 }

@@ -92,7 +92,7 @@ public class IcebergJobManagerApplication {
 
     if (leaderElection != null) {
       // Start leader election in background
-      scheduler.submit(() -> {
+      scheduler.execute(() -> {
         try {
           LOG.info("Starting leader election process...");
           leaderElection.start();
@@ -287,6 +287,7 @@ public class IcebergJobManagerApplication {
     return jobConfig != null ? jobConfig.jobId() : "unknown";
   }
 
+  @SuppressWarnings("ShutdownHook")
   public static void main(String[] args) {
     try {
       IcebergJobConfig jobConfig = loadJobConfig();

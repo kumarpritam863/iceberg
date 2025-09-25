@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -141,6 +142,7 @@ public class HealthCheckServer {
                 boolean ready = readinessCheck != null ? readinessCheck.get() : true;
 
                 String response = String.format(
+                    Locale.ROOT,
                     "{\"health\": \"%s\", \"readiness\": \"%s\", \"port\": %d, \"running\": %s}",
                     live ? "UP" : "DOWN",
                     ready ? "UP" : "DOWN",

@@ -126,7 +126,7 @@ public class LeaderElectionManager {
                         }
                     }
                 },
-                (exception) -> {
+                exception -> {
                     LOG.error("Leader election failed for identity: {}", identity, exception);
                     isLeader = false;
                     leaderLatch.countDown();
@@ -159,7 +159,7 @@ public class LeaderElectionManager {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            LOG.warn("Interrupted while waiting for leadership");
+            LOG.warn("Interrupted while waiting for leadership", e);
             return false;
         }
     }
@@ -198,8 +198,8 @@ public class LeaderElectionManager {
      * Get the current leader identity.
      */
     public String getLeaderIdentity() {
-        if (leaderElector != null) {
-            return leaderElector.getLeaderRecord();
+        if (isLeader()) {
+            return identity;
         }
         return null;
     }
@@ -219,14 +219,14 @@ public class LeaderElectionManager {
                             .namespace(namespace));
 
                     coordinationV1Api.createNamespacedLease(namespace, lease, null, null, null, null);
-                    LOG.info("Created lease {} in namespace {}", leaseName, namespace);
+                    LOG.info("Created lease {} in namespace {}", leaseName, namespace, e);
                 } catch (ApiException createException) {
                     if (createException.getCode() != 409) { // Ignore conflict (already exists)
-                        LOG.warn("Failed to create lease {}: {}", leaseName, createException.getMessage());
+                        LOG.warn("Failed to create lease {}: {}", leaseName, createException.getMessage(), createException);
                     }
                 }
             } else {
-                LOG.warn("Error checking lease {}: {}", leaseName, e.getMessage());
+                LOG.warn("Error checking lease {}: {}", leaseName, e.getMessage(), e);
             }
         }
     }
