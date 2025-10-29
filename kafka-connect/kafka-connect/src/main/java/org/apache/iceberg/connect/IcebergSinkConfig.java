@@ -104,6 +104,8 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String COORDINATOR_EXECUTOR_KEEP_ALIVE_TIMEOUT_MS =
       "iceberg.coordinator-executor-keep-alive-timeout-ms";
+  private static final String COORDINATOR_IMPL_PROP = "iceberg.coordinator.impl";
+  private static final String DEFAULT_COORDINATOR_IMPL = "RAFT";
 
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
@@ -235,6 +237,15 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        COORDINATOR_IMPL_PROP,
+        ConfigDef.Type.STRING,
+        DEFAULT_COORDINATOR_IMPL,
+        ConfigDef.ValidString.in("LEAST_PARTITION", "RAFT"),
+        Importance.HIGH,
+        "Coordinator implementation to use. Options: "
+            + "LEAST_PARTITION (default) - Original implementation using least-partition election; "
+            + "RAFT - Uses Raft consensus for robust coordinator election with automatic failover and no split-brain.");
     return configDef;
   }
 
@@ -450,6 +461,10 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public JsonConverter jsonConverter() {
     return jsonConverter;
+  }
+
+  public String coordinatorImpl() {
+    return getString(COORDINATOR_IMPL_PROP);
   }
 
   @VisibleForTesting

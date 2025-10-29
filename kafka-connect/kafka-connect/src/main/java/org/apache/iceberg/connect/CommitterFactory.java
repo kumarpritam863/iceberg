@@ -19,10 +19,32 @@
 package org.apache.iceberg.connect;
 
 import org.apache.iceberg.connect.channel.CommitterImpl;
+import org.apache.iceberg.connect.channel.RaftCommitterImpl;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class CommitterFactory {
+
+  private static final Logger LOG = LoggerFactory.getLogger(CommitterFactory.class);
+
   static Committer createCommitter(IcebergSinkConfig config) {
-    return new CommitterImpl();
+    String coordinatorImpl = config.coordinatorImpl();
+
+    switch (coordinatorImpl) {
+      case "RAFT":
+        LOG.info("Creating Raft-based committer for task {}", config.taskId());
+        return new RaftCommitterImpl();
+
+      case "LEAST_PARTITION":
+        LOG.info("Creating least-partition committer for task {}", config.taskId());
+        return new CommitterImpl();
+
+      default:
+        throw new IllegalArgumentException(
+            "Unknown coordinator implementation: "
+                + coordinatorImpl
+                + ". Valid options: LEAST_PARTITION, RAFT");
+    }
   }
 
   private CommitterFactory() {}

@@ -26,23 +26,23 @@ import static org.mockito.Mockito.verify;
 
 import org.junit.jupiter.api.Test;
 
-public class TestCoordinatorThread {
+public class TestChannelThread {
 
   @Test
   public void testRun() {
     Coordinator coordinator = mock(Coordinator.class);
-    CoordinatorThread coordinatorThread = new CoordinatorThread(coordinator);
+    ChannelThread ChannelThread = new ChannelThread(coordinator);
 
-    coordinatorThread.start();
+    ChannelThread.start();
 
     verify(coordinator, timeout(1000)).start();
     verify(coordinator, timeout(1000).atLeast(1)).process();
     verify(coordinator, times(0)).stop();
-    assertThat(coordinatorThread.isTerminated()).isFalse();
+    assertThat(ChannelThread.isTerminated()).isFalse();
 
-    coordinatorThread.terminate();
+    ChannelThread.terminate();
 
     verify(coordinator, timeout(1000)).stop();
-    assertThat(coordinatorThread.isTerminated()).isTrue();
+    assertThat(ChannelThread.isTerminated()).isTrue();
   }
 }

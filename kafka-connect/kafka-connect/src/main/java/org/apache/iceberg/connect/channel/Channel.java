@@ -72,6 +72,10 @@ abstract class Channel {
     this.producerId = UUID.randomUUID().toString();
   }
 
+  protected abstract void process();
+
+  protected void terminate() {}
+
   protected void send(Event event) {
     send(ImmutableList.of(event), ImmutableMap.of());
   }

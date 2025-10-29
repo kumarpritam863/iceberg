@@ -41,7 +41,7 @@ public class CommitterImpl implements Committer {
 
   private static final Logger LOG = LoggerFactory.getLogger(CommitterImpl.class);
 
-  private CoordinatorThread coordinatorThread;
+  private ChannelThread ChannelThread;
   private Worker worker;
   private Catalog catalog;
   private IcebergSinkConfig config;
@@ -179,7 +179,7 @@ public class CommitterImpl implements Committer {
   }
 
   private void processControlEvents() {
-    if (coordinatorThread != null && coordinatorThread.isTerminated()) {
+    if (ChannelThread != null && ChannelThread.isTerminated()) {
       throw new NotRunningException(
           String.format(
               "Coordinator unexpectedly terminated on committer %s-%s",
@@ -200,15 +200,15 @@ public class CommitterImpl implements Committer {
   }
 
   private void startCoordinator() {
-    if (null == this.coordinatorThread) {
+    if (null == this.ChannelThread) {
       LOG.info(
           "Task {}-{} elected leader, starting commit coordinator",
           config.connectorName(),
           config.taskId());
       Coordinator coordinator =
           new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
-      coordinatorThread = new CoordinatorThread(coordinator);
-      coordinatorThread.start();
+      ChannelThread = new ChannelThread(coordinator);
+      ChannelThread.start();
     }
   }
 
@@ -220,9 +220,9 @@ public class CommitterImpl implements Committer {
   }
 
   private void stopCoordinator() {
-    if (coordinatorThread != null) {
-      coordinatorThread.terminate();
-      coordinatorThread = null;
+    if (ChannelThread != null) {
+      ChannelThread.terminate();
+      ChannelThread = null;
     }
   }
 }

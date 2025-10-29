@@ -48,6 +48,7 @@ import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
+import org.apache.iceberg.connect.events.RaftHeartbeat;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.NoSuchTableException;
@@ -61,9 +62,18 @@ import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class Coordinator extends Channel {
+/**
+ * Raft-based Coordinator implementation that sends periodic heartbeats.
+ *
+ * <p>This coordinator extends the base functionality to:
+ * <ul>
+ *   <li>Send Raft heartbeats every 1.5 seconds to maintain leadership
+ *   <li>Handle commit cycle as normal coordinator
+ * </ul>
+ */
+class RaftCoordinator extends Channel {
 
-  private static final Logger LOG = LoggerFactory.getLogger(Coordinator.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RaftCoordinator.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
   private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";
@@ -75,16 +85,19 @@ class Coordinator extends Channel {
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
+  private final RaftState raftState;
   private volatile boolean terminated;
+  private long lastHeartbeatTime;
 
-  Coordinator(
+  RaftCoordinator(
       Catalog catalog,
       IcebergSinkConfig config,
       Collection<MemberDescription> members,
       KafkaClientFactory clientFactory,
-      SinkTaskContext context) {
+      SinkTaskContext context,
+      RaftState raftState) {
     // pass consumer group ID to which we commit low watermark offsets
-    super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
+    super("raft-coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
 
     this.catalog = catalog;
     this.config = config;
@@ -102,13 +115,22 @@ class Coordinator extends Channel {
             new LinkedBlockingQueue<>(),
             new ThreadFactoryBuilder()
                 .setDaemon(true)
-                .setNameFormat("iceberg-committer" + "-%d")
+                .setNameFormat("iceberg-raft-committer" + "-%d")
                 .build());
     this.commitState = new CommitState(config);
+    this.raftState = raftState;
+    this.lastHeartbeatTime = System.currentTimeMillis();
   }
 
   @Override
   public void process() {
+    // Send Raft heartbeat every 1.5 seconds to maintain leadership
+    long currentTime = System.currentTimeMillis();
+    if (currentTime - lastHeartbeatTime >= RaftState.HEARTBEAT_INTERVAL_MS) {
+      sendRaftHeartbeat();
+      lastHeartbeatTime = currentTime;
+    }
+
     if (commitState.isCommitIntervalReached()) {
       // send out begin commit
       commitState.startNewCommit();
@@ -122,6 +144,20 @@ class Coordinator extends Channel {
 
     if (commitState.isCommitTimedOut()) {
       commit(true);
+    }
+  }
+
+  private void sendRaftHeartbeat() {
+    if (raftState.isLeader()) {
+      Event event =
+          new Event(
+              config.connectGroupId(),
+              new RaftHeartbeat(config.taskId(), raftState.getCurrentTerm()));
+      send(event);
+      LOG.debug(
+          "Sent Raft heartbeat from leader {} for term {}",
+          config.taskId(),
+          raftState.getCurrentTerm());
     }
   }
 

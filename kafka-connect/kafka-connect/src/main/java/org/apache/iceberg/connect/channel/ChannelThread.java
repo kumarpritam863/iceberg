@@ -21,40 +21,46 @@ package org.apache.iceberg.connect.channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class CoordinatorThread extends Thread {
-  private static final Logger LOG = LoggerFactory.getLogger(CoordinatorThread.class);
+/**
+ * Generic thread wrapper for Channel-based coordinators.
+ *
+ * <p>This class can wrap any Channel subclass (Coordinator, RaftCoordinator, etc.) and run it in a
+ * separate thread.
+ */
+class ChannelThread extends Thread {
+  private static final Logger LOG = LoggerFactory.getLogger(ChannelThread.class);
   private static final String THREAD_NAME = "iceberg-coord";
 
-  private final Coordinator coordinator;
+  private final Channel channel;
   private volatile boolean terminated;
 
-  CoordinatorThread(Coordinator coordinator) {
+  ChannelThread(Channel channel) {
     super(THREAD_NAME);
-    this.coordinator = coordinator;
+    this.channel = channel;
   }
 
   @Override
   public void run() {
     try {
-      coordinator.start();
+      channel.start();
     } catch (Exception e) {
-      LOG.error("Coordinator error during start, exiting thread", e);
+      LOG.error("Channel error during start, exiting thread", e);
       this.terminated = true;
     }
 
     while (!terminated) {
       try {
-        coordinator.process();
+        channel.process();
       } catch (Exception e) {
-        LOG.error("Coordinator error during process, exiting thread", e);
+        LOG.error("Channel error during process, exiting thread", e);
         this.terminated = true;
       }
     }
 
     try {
-      coordinator.stop();
+      channel.stop();
     } catch (Exception e) {
-      LOG.error("Coordinator error during stop, ignoring", e);
+      LOG.error("Channel error during stop, ignoring", e);
     }
   }
 
@@ -64,6 +70,6 @@ class CoordinatorThread extends Thread {
 
   void terminate() {
     this.terminated = true;
-    coordinator.terminate();
+    channel.terminate();
   }
 }

@@ -31,26 +31,40 @@ import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.PayloadType;
+import org.apache.iceberg.connect.events.RaftHeartbeat;
+import org.apache.iceberg.connect.events.RaftRequestVote;
+import org.apache.iceberg.connect.events.RaftVoteResponse;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
-class Worker extends Channel {
+/**
+ * Raft-based Worker implementation that handles Raft consensus messages.
+ *
+ * <p>This worker extends the base Channel class to handle:
+ * <ul>
+ *   <li>Regular commit cycle messages (START_COMMIT)
+ *   <li>Raft consensus messages (RequestVote, VoteResponse, Heartbeat)
+ * </ul>
+ */
+class RaftWorker extends Channel {
 
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
+  private final RaftCommitterImpl committer;
 
-  Worker(
+  RaftWorker(
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
       SinkWriter sinkWriter,
-      SinkTaskContext context) {
+      SinkTaskContext context,
+      RaftCommitterImpl committer) {
     // pass transient consumer group ID to which we never commit offsets
     super(
-        "worker",
+        "raft-worker",
         config.controlGroupIdPrefix() + UUID.randomUUID(),
         config,
         clientFactory,
@@ -59,6 +73,7 @@ class Worker extends Channel {
     this.config = config;
     this.context = context;
     this.sinkWriter = sinkWriter;
+    this.committer = committer;
   }
 
   @Override
@@ -69,10 +84,27 @@ class Worker extends Channel {
   @Override
   protected boolean receive(Envelope envelope) {
     Event event = envelope.event();
-    if (event.payload().type() != PayloadType.START_COMMIT) {
-      return false;
-    }
+    PayloadType payloadType = event.payload().type();
 
+    switch (payloadType) {
+      case START_COMMIT:
+        return handleStartCommit(event);
+
+      case RAFT_REQUEST_VOTE:
+        return handleRaftRequestVote(event);
+
+      case RAFT_VOTE_RESPONSE:
+        return handleRaftVoteResponse(event);
+
+      case RAFT_HEARTBEAT:
+        return handleRaftHeartbeat(event);
+
+      default:
+        return false;
+    }
+  }
+
+  private boolean handleStartCommit(Event event) {
     SinkWriterResult results = sinkWriter.completeWrite();
 
     // include all assigned topic partitions even if no messages were read
@@ -113,6 +145,48 @@ class Worker extends Channel {
     send(events, results.sourceOffsets());
 
     return true;
+  }
+
+  private boolean handleRaftRequestVote(Event event) {
+    RaftRequestVote payload = (RaftRequestVote) event.payload();
+    committer.handleRaftRequestVote(payload.candidateId(), payload.term());
+    return true;
+  }
+
+  private boolean handleRaftVoteResponse(Event event) {
+    RaftVoteResponse payload = (RaftVoteResponse) event.payload();
+    committer.handleRaftVoteResponse(payload.voterId(), payload.term(), payload.voteGranted());
+    return true;
+  }
+
+  private boolean handleRaftHeartbeat(Event event) {
+    RaftHeartbeat payload = (RaftHeartbeat) event.payload();
+    committer.handleRaftHeartbeat(payload.leaderId(), payload.term());
+    return true;
+  }
+
+  /**
+   * Sends a Raft RequestVote message to all workers via the control topic.
+   *
+   * @param candidateId ID of the candidate requesting votes
+   * @param term Election term
+   */
+  void sendRaftRequestVote(String candidateId, long term) {
+    Event event = new Event(config.connectGroupId(), new RaftRequestVote(candidateId, term));
+    send(event);
+  }
+
+  /**
+   * Sends a Raft VoteResponse message to all workers via the control topic.
+   *
+   * @param voterId ID of the voter
+   * @param term Election term
+   * @param voteGranted Whether the vote was granted
+   */
+  void sendRaftVoteResponse(String voterId, long term, boolean voteGranted) {
+    Event event =
+        new Event(config.connectGroupId(), new RaftVoteResponse(voterId, term, voteGranted));
+    send(event);
   }
 
   @Override
