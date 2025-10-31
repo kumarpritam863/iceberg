@@ -84,7 +84,7 @@ public class RaftHeartbeat implements Payload {
   public void put(int i, Object v) {
     switch (AvroUtil.positionToId(i, avroSchema)) {
       case LEADER_ID:
-        this.leaderId = (String) v;
+        this.leaderId = v == null ? null : v.toString();
         return;
       case TERM:
         this.term = (Long) v;

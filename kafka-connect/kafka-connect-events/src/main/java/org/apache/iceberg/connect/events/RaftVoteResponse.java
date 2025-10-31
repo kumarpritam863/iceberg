@@ -91,7 +91,7 @@ public class RaftVoteResponse implements Payload {
   public void put(int i, Object v) {
     switch (AvroUtil.positionToId(i, avroSchema)) {
       case VOTER_ID:
-        this.voterId = (String) v;
+        this.voterId = v == null ? null : v.toString();
         return;
       case TERM:
         this.term = (Long) v;
