@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -58,7 +57,6 @@ import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFact
 import org.apache.iceberg.util.Tasks;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
-import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -202,9 +200,7 @@ class RaftCoordinator extends Channel {
         .executeWith(exec)
         .stopOnFailure()
         .run(
-            entry -> {
-              commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
-            });
+            entry -> commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -344,7 +340,8 @@ class RaftCoordinator extends Channel {
       Map<String, String> summary = snapshot.summary();
       String value = summary.get(snapshotOffsetsProp);
       if (value != null) {
-        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
+        TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {
+        };
         try {
           return MAPPER.readValue(value, typeRef);
         } catch (IOException e) {
