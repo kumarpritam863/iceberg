@@ -127,9 +127,9 @@ class RaftCoordinator extends Channel {
 
   @Override
   public void process() {
-    // Send Raft heartbeat every 1.5 seconds to maintain leadership
+    // Send Raft heartbeat to maintain leadership (interval from config)
     long currentTime = System.currentTimeMillis();
-    if (currentTime - lastHeartbeatTime >= RaftState.HEARTBEAT_INTERVAL_MS) {
+    if (currentTime - lastHeartbeatTime >= raftState.getHeartbeatIntervalMs()) {
       sendRaftHeartbeat();
       lastHeartbeatTime = currentTime;
     }

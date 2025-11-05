@@ -71,9 +71,20 @@ public class RaftCommitterImpl implements Committer {
       this.context = sinkTaskContext;
       this.clientFactory = new KafkaClientFactory(config.kafkaProps());
 
-      // Initialize Raft consensus state
-      this.raftState = new RaftState(config.taskId());
-      LOG.info("Initialized Raft consensus for task {}", config.taskId());
+      // Initialize Raft consensus state with configuration
+      this.raftState =
+          new RaftState(
+              config.taskId(),
+              config.raftElectionTimeoutMs(),
+              config.raftElectionTimeoutJitterMs(),
+              config.raftHeartbeatIntervalMs());
+
+      LOG.info(
+          "Initialized Raft consensus for task {} with election timeout {}ms-{}ms, heartbeat {}ms",
+          config.taskId(),
+          config.raftElectionTimeoutMs(),
+          config.raftElectionTimeoutMs() + config.raftElectionTimeoutJitterMs(),
+          config.raftHeartbeatIntervalMs());
     }
   }
 

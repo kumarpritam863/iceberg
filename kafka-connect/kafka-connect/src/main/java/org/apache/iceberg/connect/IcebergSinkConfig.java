@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
@@ -106,6 +107,18 @@ public class IcebergSinkConfig extends AbstractConfig {
       "iceberg.coordinator-executor-keep-alive-timeout-ms";
   private static final String COORDINATOR_IMPL_PROP = "iceberg.coordinator.impl";
   private static final String DEFAULT_COORDINATOR_IMPL = "RAFT";
+
+  // Raft consensus configuration
+  private static final String RAFT_ELECTION_TIMEOUT_MS_PROP = "iceberg.raft.election-timeout-ms";
+  private static final long RAFT_ELECTION_TIMEOUT_MS_DEFAULT = 5_000L; // 5 seconds
+
+  private static final String RAFT_ELECTION_TIMEOUT_JITTER_MS_PROP =
+      "iceberg.raft.election-timeout-jitter-ms";
+  private static final long RAFT_ELECTION_TIMEOUT_JITTER_MS_DEFAULT = 5_000L; // ±5 seconds
+
+  private static final String RAFT_HEARTBEAT_INTERVAL_MS_PROP =
+      "iceberg.raft.heartbeat-interval-ms";
+  private static final long RAFT_HEARTBEAT_INTERVAL_MS_DEFAULT = 1_500L; // 1.5 seconds
 
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
@@ -246,6 +259,33 @@ public class IcebergSinkConfig extends AbstractConfig {
         "Coordinator implementation to use. Options: "
             + "LEAST_PARTITION (default) - Original implementation using least-partition election; "
             + "RAFT - Uses Raft consensus for robust coordinator election with automatic failover and no split-brain.");
+    configDef.define(
+        RAFT_ELECTION_TIMEOUT_MS_PROP,
+        ConfigDef.Type.LONG,
+        RAFT_ELECTION_TIMEOUT_MS_DEFAULT,
+        ConfigDef.Range.atLeast(1000L),
+        Importance.MEDIUM,
+        "Base election timeout for Raft consensus in milliseconds. "
+            + "Workers will start election if no heartbeat received within (timeout + jitter). "
+            + "Must be greater than heartbeat interval * 3 for stability. Default: 5000ms (5s)");
+    configDef.define(
+        RAFT_ELECTION_TIMEOUT_JITTER_MS_PROP,
+        ConfigDef.Type.LONG,
+        RAFT_ELECTION_TIMEOUT_JITTER_MS_DEFAULT,
+        ConfigDef.Range.atLeast(0L),
+        Importance.MEDIUM,
+        "Random jitter added to election timeout to prevent split votes. "
+            + "Actual timeout will be random value in [timeout, timeout + jitter]. "
+            + "Larger values reduce probability of simultaneous elections. Default: 5000ms (5s)");
+    configDef.define(
+        RAFT_HEARTBEAT_INTERVAL_MS_PROP,
+        ConfigDef.Type.LONG,
+        RAFT_HEARTBEAT_INTERVAL_MS_DEFAULT,
+        ConfigDef.Range.atLeast(100L),
+        Importance.MEDIUM,
+        "Interval at which Raft leader sends heartbeats to maintain leadership. "
+            + "Must be less than (election-timeout / 3) to prevent spurious elections. "
+            + "Lower values increase network traffic but improve failure detection. Default: 1500ms (1.5s)");
     return configDef;
   }
 
@@ -292,6 +332,28 @@ public class IcebergSinkConfig extends AbstractConfig {
           tablesRouteField() != null, "Must specify a route field if using dynamic table names");
     } else {
       throw new ConfigException("Must specify table name(s)");
+    }
+
+    // Raft configuration validation
+    if ("RAFT".equals(coordinatorImpl())) {
+      long heartbeat = raftHeartbeatIntervalMs();
+      long electionTimeout = raftElectionTimeoutMs();
+
+      checkState(
+          heartbeat * 3 < electionTimeout,
+          String.format(Locale.ROOT,
+              "Raft heartbeat interval (%dms) must be less than election timeout (%dms) / 3. "
+                  + "Current ratio would cause spurious elections. "
+                  + "Recommended: heartbeat ≤ %dms",
+              heartbeat,
+              electionTimeout,
+              electionTimeout / 3));
+
+      if (raftElectionTimeoutJitterMs() == 0) {
+        LOG.warn(
+            "Raft election timeout jitter is 0ms. This may cause split votes during simultaneous elections. "
+                + "Recommended: at least 1000ms (1s) for production deployments.");
+      }
     }
   }
 
@@ -465,6 +527,18 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public String coordinatorImpl() {
     return getString(COORDINATOR_IMPL_PROP);
+  }
+
+  public long raftElectionTimeoutMs() {
+    return getLong(RAFT_ELECTION_TIMEOUT_MS_PROP);
+  }
+
+  public long raftElectionTimeoutJitterMs() {
+    return getLong(RAFT_ELECTION_TIMEOUT_JITTER_MS_PROP);
+  }
+
+  public long raftHeartbeatIntervalMs() {
+    return getLong(RAFT_HEARTBEAT_INTERVAL_MS_PROP);
   }
 
   @VisibleForTesting

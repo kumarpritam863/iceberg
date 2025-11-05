@@ -60,6 +60,11 @@ class RaftState {
   private final String nodeId;
   private final Random random = new Random();
 
+  // Raft timing configuration (injected from IcebergSinkConfig)
+  private final long baseElectionTimeoutMs;
+  private final long electionTimeoutJitterMs;
+  private final long heartbeatIntervalMs;
+
   // Persistent state (would be persisted in production)
   private final AtomicLong currentTerm = new AtomicLong(0);
   private final AtomicReference<String> votedFor = new AtomicReference<>(null);
@@ -74,20 +79,40 @@ class RaftState {
   private final Set<String> votesReceived = new HashSet<>();
   private int clusterSize = 1; // Updated dynamically based on consumer group members
 
-  // Configuration
-  private static final long BASE_ELECTION_TIMEOUT_MS = 5_000; // 5 seconds
-  private static final long ELECTION_TIMEOUT_RANGE_MS = 5_000; // Randomized ±5 seconds
-  static final long HEARTBEAT_INTERVAL_MS = 1_500; // 1.5 seconds (< election timeout)
-
-  RaftState(String nodeId) {
+  RaftState(
+      String nodeId,
+      long baseElectionTimeoutMs,
+      long electionTimeoutJitterMs,
+      long heartbeatIntervalMs) {
     this.nodeId = nodeId;
+    this.baseElectionTimeoutMs = baseElectionTimeoutMs;
+    this.electionTimeoutJitterMs = electionTimeoutJitterMs;
+    this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.electionTimeout = randomElectionTimeout();
-    LOG.info("Raft state initialized for node {} with election timeout {}ms", nodeId, electionTimeout);
+
+    // Validation and warning for potentially unstable configuration
+    if (heartbeatIntervalMs * 3 >= baseElectionTimeoutMs) {
+      LOG.warn(
+          "Raft configuration may be unstable: heartbeat interval ({}ms) should be < "
+              + "election timeout ({}ms) / 3. Consider reducing heartbeat interval or "
+              + "increasing election timeout.",
+          heartbeatIntervalMs,
+          baseElectionTimeoutMs);
+    }
+
+    LOG.info(
+        "Raft state initialized for node {} with election timeout {}ms (base: {}ms, jitter: {}ms), "
+            + "heartbeat interval {}ms",
+        nodeId,
+        electionTimeout,
+        baseElectionTimeoutMs,
+        electionTimeoutJitterMs,
+        heartbeatIntervalMs);
   }
 
   /** Returns a randomized election timeout to prevent split votes */
   private long randomElectionTimeout() {
-    return BASE_ELECTION_TIMEOUT_MS + random.nextInt((int) ELECTION_TIMEOUT_RANGE_MS);
+    return baseElectionTimeoutMs + random.nextInt((int) electionTimeoutJitterMs + 1);
   }
 
   /**
@@ -111,7 +136,7 @@ class RaftState {
   /** Checks if it's time to send heartbeat (for leaders) */
   boolean shouldSendHeartbeat() {
     return state == State.LEADER
-        && System.currentTimeMillis() - lastHeartbeatTime > HEARTBEAT_INTERVAL_MS;
+        && System.currentTimeMillis() - lastHeartbeatTime > heartbeatIntervalMs;
   }
 
   /**
@@ -305,6 +330,11 @@ class RaftState {
   /** Returns whether this node is the leader */
   boolean isLeader() {
     return state == State.LEADER;
+  }
+
+  /** Returns the configured heartbeat interval in milliseconds */
+  long getHeartbeatIntervalMs() {
+    return heartbeatIntervalMs;
   }
 
   /** Resets election timeout (used when receiving valid messages) */
