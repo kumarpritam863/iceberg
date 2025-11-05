@@ -28,7 +28,6 @@ import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTest
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
-import org.apache.kafka.common.ConsumerGroupState;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -57,7 +56,6 @@ public class RaftCommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
-  private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
   // Raft consensus state
@@ -84,14 +82,10 @@ public class RaftCommitterImpl implements Committer {
    *
    * @return true if this task is the Raft leader (coordinator)
    */
-  private boolean hasLeaderPartition() {
+  private boolean isLeader() {
     ConsumerGroupDescription groupDesc;
     try (Admin admin = clientFactory.createAdmin()) {
       groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
-    }
-
-    if (groupDesc.state() != ConsumerGroupState.STABLE) {
-      return false;
     }
 
     Collection<MemberDescription> members = groupDesc.members();
@@ -111,11 +105,7 @@ public class RaftCommitterImpl implements Committer {
     }
 
     // Return whether this task is the current Raft leader
-    boolean isLeader = raftState.isLeader();
-    if (isLeader) {
-      membersWhenWorkerIsCoordinator = members;
-    }
-    return isLeader;
+    return raftState.isLeader();
   }
 
   /**
@@ -246,7 +236,7 @@ public class RaftCommitterImpl implements Committer {
       worker.process();
 
       // Check Raft leader status
-      if (hasLeaderPartition()) {
+      if (isLeader()) {
         startCoordinator();
       } else if (coordinatorThread != null && !raftState.isLeader()) {
         LOG.info("Task {} is no longer Raft leader, stopping coordinator", config.taskId());
@@ -272,7 +262,7 @@ public class RaftCommitterImpl implements Committer {
           config.taskId());
       RaftCoordinator coordinator =
           new RaftCoordinator(
-              catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context, raftState);
+              catalog, config, clientFactory, context, raftState);
       coordinatorThread = new ChannelThread(coordinator);
       coordinatorThread.start();
     }

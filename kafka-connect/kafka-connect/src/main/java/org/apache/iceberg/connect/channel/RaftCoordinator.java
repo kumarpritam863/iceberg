@@ -56,6 +56,8 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.Tasks;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -92,7 +94,6 @@ class RaftCoordinator extends Channel {
   RaftCoordinator(
       Catalog catalog,
       IcebergSinkConfig config,
-      Collection<MemberDescription> members,
       KafkaClientFactory clientFactory,
       SinkTaskContext context,
       RaftState raftState) {
@@ -101,8 +102,12 @@ class RaftCoordinator extends Channel {
 
     this.catalog = catalog;
     this.config = config;
+    ConsumerGroupDescription groupDesc;
+    try (Admin admin = clientFactory.createAdmin()) {
+      groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
+    }
     this.totalPartitionCount =
-        members.stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
+            groupDesc.members().stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
     this.snapshotOffsetsProp =
         String.format(
             "kafka.connect.offsets.%s.%s", config.controlTopic(), config.connectGroupId());
