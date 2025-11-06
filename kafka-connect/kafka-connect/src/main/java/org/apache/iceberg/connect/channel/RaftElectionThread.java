@@ -64,6 +64,7 @@ public class RaftElectionThread implements Runnable {
   private final ExecutorService executorService;
   private volatile boolean running = true;
   private volatile long lastClusterSizeCheck = 0;
+  private volatile boolean wasLeader = false; // Track leadership for transition detection
 
   /**
    * Callback interface for Raft election events.
@@ -120,6 +121,10 @@ public class RaftElectionThread implements Runnable {
               return t;
             });
 
+    // Register callback for immediate leadership change notifications
+    // This reduces transition latency from 500ms (tick interval) to near-instant
+    raftState.setLeadershipChangeCallback(this::checkLeadershipTransition);
+
     LOG.info("RaftElectionThread created for task {}", config.taskId());
   }
 
@@ -149,39 +154,13 @@ public class RaftElectionThread implements Runnable {
   public void run() {
     LOG.info("RaftElectionThread main loop started for task {}", config.taskId());
 
-    boolean wasLeader = false;
-
     while (running && !Thread.currentThread().isInterrupted()) {
       try {
-        // Track leadership state to detect transitions
-        boolean isLeader = raftState.isLeader();
-
-        // Became leader: start coordinator
-        if (isLeader && !wasLeader) {
-          LOG.info("Task {} became Raft leader, notifying callback", config.taskId());
-          try {
-            callback.onBecameLeader();
-            wasLeader = true;
-          } catch (Exception e) {
-            LOG.error("Error in onBecameLeader callback", e);
-            // Don't propagate - let election continue
-          }
-        }
-
-        // Lost leadership: stop coordinator
-        if (!isLeader && wasLeader) {
-          LOG.info("Task {} lost Raft leadership, notifying callback", config.taskId());
-          try {
-            callback.onLostLeadership();
-            wasLeader = false;
-          } catch (Exception e) {
-            LOG.error("Error in onLostLeadership callback", e);
-            // Don't propagate - let election continue
-          }
-        }
+        // Check for leadership transitions (also triggered immediately via callback)
+        checkLeadershipTransition();
 
         // Leader: send heartbeats if interval elapsed
-        if (isLeader && raftState.shouldSendHeartbeat()) {
+        if (raftState.isLeader() && raftState.shouldSendHeartbeat()) {
           LOG.debug("Sending heartbeat from leader {}", config.taskId());
           try {
             callback.onSendHeartbeat();
@@ -193,7 +172,7 @@ public class RaftElectionThread implements Runnable {
         }
 
         // Follower/Candidate: check for election timeout
-        if (!isLeader && raftState.isElectionTimeoutExpired()) {
+        if (!raftState.isLeader() && raftState.isElectionTimeoutExpired()) {
           LOG.info(
               "Election timeout expired for task {}, starting election", config.taskId());
           try {
@@ -237,6 +216,39 @@ public class RaftElectionThread implements Runnable {
 
       // Notify callback to broadcast RequestVote messages
       callback.onRequestVotes(candidateId, term);
+    }
+  }
+
+  /**
+   * Checks for leadership transitions and invokes callbacks.
+   * Called both periodically (500ms) and immediately via RaftState callback.
+   * Thread-safe: can be called from multiple threads.
+   */
+  private synchronized void checkLeadershipTransition() {
+    boolean isLeader = raftState.isLeader();
+
+    // Became leader: start coordinator
+    if (isLeader && !wasLeader) {
+      LOG.info("Task {} became Raft leader, notifying callback", config.taskId());
+      try {
+        callback.onBecameLeader();
+        wasLeader = true;
+      } catch (Exception e) {
+        LOG.error("Error in onBecameLeader callback", e);
+        // Don't propagate - let election continue
+      }
+    }
+
+    // Lost leadership: stop coordinator
+    if (!isLeader && wasLeader) {
+      LOG.info("Task {} lost Raft leadership, notifying callback", config.taskId());
+      try {
+        callback.onLostLeadership();
+        wasLeader = false;
+      } catch (Exception e) {
+        LOG.error("Error in onLostLeadership callback", e);
+        // Don't propagate - let election continue
+      }
     }
   }
 

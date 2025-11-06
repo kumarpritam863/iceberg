@@ -110,15 +110,15 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   // Raft consensus configuration
   private static final String RAFT_ELECTION_TIMEOUT_MS_PROP = "iceberg.raft.election-timeout-ms";
-  private static final long RAFT_ELECTION_TIMEOUT_MS_DEFAULT = 5_000L; // 5 seconds
+  private static final long RAFT_ELECTION_TIMEOUT_MS_DEFAULT = 3_000L; // 3 seconds (reduced for faster elections)
 
   private static final String RAFT_ELECTION_TIMEOUT_JITTER_MS_PROP =
       "iceberg.raft.election-timeout-jitter-ms";
-  private static final long RAFT_ELECTION_TIMEOUT_JITTER_MS_DEFAULT = 5_000L; // ±5 seconds
+  private static final long RAFT_ELECTION_TIMEOUT_JITTER_MS_DEFAULT = 2_000L; // ±2 seconds (reduced proportionally)
 
   private static final String RAFT_HEARTBEAT_INTERVAL_MS_PROP =
       "iceberg.raft.heartbeat-interval-ms";
-  private static final long RAFT_HEARTBEAT_INTERVAL_MS_DEFAULT = 1_500L; // 1.5 seconds
+  private static final long RAFT_HEARTBEAT_INTERVAL_MS_DEFAULT = 500L; // 500ms (increased frequency for stability)
 
   @VisibleForTesting static final String COMMA_NO_PARENS_REGEX = ",(?![^()]*+\\))";
 
@@ -339,20 +339,38 @@ public class IcebergSinkConfig extends AbstractConfig {
       long heartbeat = raftHeartbeatIntervalMs();
       long electionTimeout = raftElectionTimeoutMs();
 
+      // Strict validation: heartbeat must be significantly less than election timeout
+      // to allow for multiple heartbeats and network latency
       checkState(
-          heartbeat * 3 < electionTimeout,
+          heartbeat * 5 < electionTimeout,
           String.format(Locale.ROOT,
-              "Raft heartbeat interval (%dms) must be less than election timeout (%dms) / 3. "
-                  + "Current ratio would cause spurious elections. "
-                  + "Recommended: heartbeat ≤ %dms",
+              "Raft heartbeat interval (%dms) must be less than election timeout (%dms) / 5. "
+                  + "This ensures at least 5 heartbeats fit within the timeout, accounting for network latency. "
+                  + "Current configuration would cause frequent spurious elections. "
+                  + "Recommended: heartbeat ≤ %dms or increase election timeout to ≥ %dms",
               heartbeat,
               electionTimeout,
-              electionTimeout / 3));
+              electionTimeout / 5,
+              heartbeat * 5));
+
+      // Warn if the ratio is marginal (between 3x and 5x)
+      if (heartbeat * 3 >= electionTimeout) {
+        LOG.warn(
+            "Raft configuration has minimal safety margin: heartbeat interval ({}ms) * 3 = {}ms "
+                + "is very close to election timeout ({}ms). "
+                + "This may cause instability under network latency. "
+                + "Recommended: use heartbeat interval ≤ {}ms for more stable elections.",
+            heartbeat,
+            heartbeat * 3,
+            electionTimeout,
+            electionTimeout / 5);
+      }
 
       if (raftElectionTimeoutJitterMs() == 0) {
         LOG.warn(
             "Raft election timeout jitter is 0ms. This may cause split votes during simultaneous elections. "
-                + "Recommended: at least 1000ms (1s) for production deployments.");
+                + "Recommended: at least {}ms for production deployments.",
+            electionTimeout / 2);
       }
     }
   }

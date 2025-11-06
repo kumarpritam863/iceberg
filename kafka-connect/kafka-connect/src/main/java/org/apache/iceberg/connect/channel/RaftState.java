@@ -82,8 +82,12 @@ class RaftState {
   private volatile long lastHeartbeatTime = System.currentTimeMillis();
   private volatile long electionTimeout;
 
-  // Election state
-  private final Set<String> votesReceived = new HashSet<>();
+  // Callback for immediate leadership change notifications
+  private volatile Runnable onLeadershipChangeCallback = null;
+
+  // Election state (synchronized for thread-safety between polling and election threads)
+  private final Set<String> votesReceived =
+      java.util.Collections.synchronizedSet(new HashSet<>());
   private int clusterSize = 1; // Updated dynamically based on consumer group members
 
   RaftState(
@@ -130,6 +134,14 @@ class RaftState {
     LOG.debug("Cluster size updated to {}", this.clusterSize);
   }
 
+  /**
+   * Sets a callback to be invoked immediately when leadership state changes.
+   * This reduces the detection latency from the election thread's tick interval (500ms).
+   */
+  void setLeadershipChangeCallback(Runnable callback) {
+    this.onLeadershipChangeCallback = callback;
+  }
+
   /** Returns required number of votes for quorum (majority) */
   int quorum() {
     return (clusterSize / 2) + 1;
@@ -142,8 +154,11 @@ class RaftState {
 
   /** Checks if it's time to send heartbeat (for leaders) */
   boolean shouldSendHeartbeat() {
+    // Send heartbeats more frequently to ensure they arrive before followers timeout
+    // Use 80% of configured interval to provide safety margin for network latency
+    long effectiveInterval = (long) (heartbeatIntervalMs * 0.8);
     return state == State.LEADER
-        && System.currentTimeMillis() - lastHeartbeatTime > heartbeatIntervalMs;
+        && System.currentTimeMillis() - lastHeartbeatTime > effectiveInterval;
   }
 
   /**
@@ -249,10 +264,20 @@ class RaftState {
     // If we see a newer term, step down
     if (term > currentTerm.get()) {
       LOG.info("Node {} discovered newer term {}, becoming follower", nodeId, term);
+      boolean wasLeader = (state == State.LEADER);
       currentTerm.set(term);
       state = State.FOLLOWER;
       votedFor.set(null);
       currentLeader = null;
+
+      // Notify election thread immediately if we lost leadership
+      if (wasLeader && onLeadershipChangeCallback != null) {
+        try {
+          onLeadershipChangeCallback.run();
+        } catch (Exception e) {
+          LOG.warn("Error in leadership change callback", e);
+        }
+      }
       return;
     }
 
@@ -310,7 +335,17 @@ class RaftState {
     // Accept leader and reset election timeout
     if (state != State.FOLLOWER) {
       LOG.info("Node {} recognizing {} as leader for term {}", nodeId, leaderId, term);
+      boolean wasLeader = (state == State.LEADER);
       state = State.FOLLOWER;
+
+      // Notify election thread immediately if we were the leader (lost leadership)
+      if (wasLeader && onLeadershipChangeCallback != null) {
+        try {
+          onLeadershipChangeCallback.run();
+        } catch (Exception e) {
+          LOG.warn("Error in leadership change callback", e);
+        }
+      }
     }
 
     currentLeader = leaderId;
@@ -327,6 +362,15 @@ class RaftState {
     state = State.LEADER;
     currentLeader = nodeId;
     lastHeartbeatTime = System.currentTimeMillis();
+
+    // Notify election thread immediately to reduce leadership transition latency
+    if (onLeadershipChangeCallback != null) {
+      try {
+        onLeadershipChangeCallback.run();
+      } catch (Exception e) {
+        LOG.warn("Error in leadership change callback", e);
+      }
+    }
   }
 
   /** Returns current term */
@@ -351,9 +395,7 @@ class RaftState {
 
   /** Returns number of votes received in current election */
   int getVoteCount() {
-    synchronized (votesReceived) {
-      return votesReceived.size();
-    }
+    return votesReceived.size();
   }
 
 }
