@@ -20,16 +20,12 @@ package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
-import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -45,37 +41,31 @@ import org.slf4j.LoggerFactory;
  *   <li>Fast fail over (5-10 seconds)
  *   <li>Zero coordinator churn during re-balancing
  *   <li>No external dependencies (no ZooKeeper/etcd)
+ *   <li>Background election thread independent of data flow
+ * </ul>
+ *
+ * <p>Architecture:
+ * <ul>
+ *   <li>RaftElectionThread: Background thread handling elections and heartbeats
+ *   <li>RaftWorker: Handles data writes and consensus messages from control topic
+ *   <li>RaftCoordinator: Leader performs commits
  * </ul>
  */
-public class RaftCommitterImpl implements Committer {
+public class RaftCommitterImpl implements Committer, RaftElectionThread.RaftElectionCallback {
 
   private static final Logger LOG = LoggerFactory.getLogger(RaftCommitterImpl.class);
 
   private ChannelThread coordinatorThread;
   private RaftWorker worker;
+  private RaftElectionThread electionThread;
   private Catalog catalog;
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
-  private final AtomicReference<Collection<MemberDescription>> members = new AtomicReference<>();
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
   // Raft consensus state
   private RaftState raftState;
-
-  @FunctionalInterface
-  interface AdminFunction<T> {
-    T apply(Admin admin) throws Exception;
-  }
-
-  <T> T withAdmin(AdminFunction<T> fn, String purpose) {
-    try (Admin admin = clientFactory.createAdmin()) {
-      return fn.apply(admin);
-    } catch (Exception ex) {
-      LOG.error("Error performing {}", purpose, ex);
-      throw new ConnectException(String.format("Error performing %s", purpose), ex);
-    }
-  }
 
   private void initialize(
       Catalog icebergCatalog,
@@ -101,34 +91,55 @@ public class RaftCommitterImpl implements Committer {
           config.raftElectionTimeoutMs(),
           config.raftElectionTimeoutMs() + config.raftElectionTimeoutJitterMs(),
           config.raftHeartbeatIntervalMs());
+
+      // Start background election thread
+      this.electionThread = new RaftElectionThread(raftState, config, clientFactory, this);
+      this.electionThread.start();
+      LOG.info("Started background Raft election thread for task {}", config.taskId());
     }
   }
 
-  /**
-   * Determines if this task should be the coordinator using Raft consensus.
-   *
-   * @return true if this task is the Raft leader (coordinator)
-   */
-  private boolean isLeader() {
-    // If already leader, don't trigger new elections
-    if (raftState.isLeader()) {
-      return true;
-    }
-    raftState.updateClusterSize(members.get().size());
-    // Check if we should start an election (only for non-leaders)
-    if (raftState.isElectionTimeoutExpired()) {
-      LOG.info("Election timeout expired, starting new election");
-      if (raftState.startElection()) {
-        // Send RequestVote to all members via control topic
-        if (worker != null) {
-          worker.sendRaftRequestVote(config.taskId(), raftState.getCurrentTerm());
-        }
-      }
-    }
+  // ========================================================================
+  // RaftElectionCallback Implementation
+  // ========================================================================
 
-    // Return whether this task is the current Raft leader
-    return raftState.isLeader();
+  @Override
+  public void onBecameLeader() {
+    LOG.info(
+        "Task {}-{} became Raft leader, starting commit coordinator",
+        config.connectorName(),
+        config.taskId());
+    startCoordinator();
   }
+
+  @Override
+  public void onLostLeadership() {
+    LOG.info(
+        "Task {}-{} lost Raft leadership, stopping commit coordinator",
+        config.connectorName(),
+        config.taskId());
+    stopCoordinator();
+  }
+
+  @Override
+  public void onSendHeartbeat() {
+    // Broadcast heartbeat via worker
+    if (worker != null) {
+      worker.sendRaftHeartbeat(config.taskId(), raftState.getCurrentTerm());
+    }
+  }
+
+  @Override
+  public void onRequestVotes(String candidateId, long term) {
+    // Broadcast RequestVote via worker
+    if (worker != null) {
+      worker.sendRaftRequestVote(candidateId, term);
+    }
+  }
+
+  // ========================================================================
+  // Raft Message Handlers (Called from RaftWorker)
+  // ========================================================================
 
   /**
    * Handles incoming Raft RequestVote message.
@@ -139,6 +150,13 @@ public class RaftCommitterImpl implements Committer {
   @VisibleForTesting
   void handleRaftRequestVote(String candidateId, long term) {
     boolean voteGranted = raftState.handleVoteRequest(candidateId, term);
+    LOG.debug(
+        "Task {} {} vote for candidate {} in term {}",
+        config.taskId(),
+        voteGranted ? "granted" : "denied",
+        candidateId,
+        term);
+
     // Send vote response via worker
     if (worker != null) {
       worker.sendRaftVoteResponse(config.taskId(), term, voteGranted);
@@ -154,10 +172,18 @@ public class RaftCommitterImpl implements Committer {
    */
   @VisibleForTesting
   void handleRaftVoteResponse(String voterId, long term, boolean voteGranted) {
-    boolean becameLeader = raftState.handleVoteResponse(voterId, term, voteGranted);
-    if (becameLeader) {
-      LOG.info("Task {} became Raft leader, starting coordinator", config.taskId());
-      startCoordinator();
+    // Let RaftState handle vote aggregation
+    // The electionThread will detect leadership transition and call onBecameLeader()
+    raftState.handleVoteResponse(voterId, term, voteGranted);
+
+    if (voteGranted) {
+      LOG.debug(
+          "Task {} received vote from {} for term {} ({}/{} votes)",
+          config.taskId(),
+          voterId,
+          term,
+          raftState.getVoteCount(),
+          raftState.quorum());
     }
   }
 
@@ -170,16 +196,14 @@ public class RaftCommitterImpl implements Committer {
   @VisibleForTesting
   void handleRaftHeartbeat(String leaderId, long term) {
     raftState.handleHeartbeat(leaderId, term);
+    LOG.debug("Task {} received heartbeat from leader {} for term {}", config.taskId(), leaderId, term);
 
-    // If we receive heartbeat, and we're currently coordinator, step down
-    if (coordinatorThread != null && !raftState.isLeader()) {
-      LOG.info(
-          "Task {} received heartbeat from new leader {}, stepping down",
-          config.taskId(),
-          leaderId);
-      stopCoordinator();
-    }
+    // The electionThread will detect leadership loss and call onLostLeadership()
   }
+
+  // ========================================================================
+  // Committer Interface Implementation
+  // ========================================================================
 
   @Override
   public void start(
@@ -198,9 +222,8 @@ public class RaftCommitterImpl implements Committer {
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
-    // With Raft, coordinator election is done via consensus, not partition assignment
-    // So we don't immediately start coordinator here
-    updateMembers();
+    // With Raft, coordinator election is done via background thread, not partition assignment
+    // Worker will be started on first save()
   }
 
   @Override
@@ -212,6 +235,13 @@ public class RaftCommitterImpl implements Committer {
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
+    // Stop background election thread first
+    if (electionThread != null) {
+      LOG.info("Stopping Raft election thread for task {}", config.taskId());
+      electionThread.stop();
+      electionThread = null;
+    }
+
     // Always try to stop the worker to avoid duplicates
     stopWorker();
 
@@ -228,7 +258,6 @@ public class RaftCommitterImpl implements Committer {
       return;
     }
 
-    updateMembers();
     // With Raft, we step down if we lose leader status, not based on partitions
     // Reset offsets to last committed to avoid data loss
     LOG.info(
@@ -238,18 +267,15 @@ public class RaftCommitterImpl implements Committer {
     KafkaUtils.seekToLastCommittedOffsets(context);
   }
 
-  private void updateMembers() {
-    members.updateAndGet(current -> withAdmin(admin ->
-            KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin), String.format("GET_MEMBERS on task {%s-%s}", config.connectorName(), config.taskId())
-    ).members());
-  }
-
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
       startWorker();
       worker.save(sinkRecords);
     }
+
+    // Process control topic events (Raft messages, commit messages)
+    // Note: Leader election happens in background thread, not here
     processControlEvents();
   }
 
@@ -261,19 +287,15 @@ public class RaftCommitterImpl implements Committer {
               config.connectorName(), config.taskId()));
     }
 
-    // Process Raft consensus and check if we should be coordinator
+    // Process messages from control topic (Raft consensus messages, commit messages)
     if (worker != null) {
       worker.process();
-
-      // Check Raft leader status
-      if (isLeader()) {
-        startCoordinator();
-      } else if (coordinatorThread != null && !raftState.isLeader()) {
-        LOG.info("Task {} is no longer Raft leader, stopping coordinator", config.taskId());
-        stopCoordinator();
-      }
     }
   }
+
+  // ========================================================================
+  // Internal Thread Management
+  // ========================================================================
 
   private void startWorker() {
     if (null == this.worker) {
@@ -287,12 +309,11 @@ public class RaftCommitterImpl implements Committer {
   private void startCoordinator() {
     if (null == this.coordinatorThread) {
       LOG.info(
-          "Task {}-{} elected Raft leader, starting commit coordinator",
+          "Task {}-{} starting Raft coordinator",
           config.connectorName(),
           config.taskId());
       RaftCoordinator coordinator =
-          new RaftCoordinator(
-              catalog, config, clientFactory, context, raftState);
+          new RaftCoordinator(catalog, config, clientFactory, context);
       coordinatorThread = new ChannelThread(coordinator);
       coordinatorThread.start();
     }

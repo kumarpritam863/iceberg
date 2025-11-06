@@ -47,7 +47,6 @@ import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
-import org.apache.iceberg.connect.events.RaftHeartbeat;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.NoSuchTableException;
@@ -63,13 +62,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Raft-based Coordinator implementation that sends periodic heartbeats.
+ * Raft-based Coordinator implementation for committing data to Iceberg.
  *
- * <p>This coordinator extends the base functionality to:
+ * <p>This coordinator runs when the worker is elected Raft leader and handles:
  * <ul>
- *   <li>Send Raft heartbeats every 1.5 seconds to maintain leadership
- *   <li>Handle commit cycle as normal coordinator
+ *   <li>Initiating commit cycles at regular intervals
+ *   <li>Aggregating data files from workers
+ *   <li>Committing aggregated data to Iceberg tables
+ *   <li>Updating Kafka consumer offsets
  * </ul>
+ *
+ * <p>Note: Raft heartbeats are sent by RaftElectionThread, not by this coordinator.
  */
 class RaftCoordinator extends Channel {
 
@@ -85,16 +88,13 @@ class RaftCoordinator extends Channel {
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
-  private final RaftState raftState;
   private volatile boolean terminated;
-  private long lastHeartbeatTime;
 
   RaftCoordinator(
       Catalog catalog,
       IcebergSinkConfig config,
       KafkaClientFactory clientFactory,
-      SinkTaskContext context,
-      RaftState raftState) {
+      SinkTaskContext context) {
     // pass consumer group ID to which we commit low watermark offsets
     super("raft-coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
 
@@ -121,18 +121,11 @@ class RaftCoordinator extends Channel {
                 .setNameFormat("iceberg-raft-committer" + "-%d")
                 .build());
     this.commitState = new CommitState(config);
-    this.raftState = raftState;
-    this.lastHeartbeatTime = System.currentTimeMillis();
   }
 
   @Override
   public void process() {
-    // Send Raft heartbeat to maintain leadership (interval from config)
-    long currentTime = System.currentTimeMillis();
-    if (currentTime - lastHeartbeatTime >= raftState.getHeartbeatIntervalMs()) {
-      sendRaftHeartbeat();
-      lastHeartbeatTime = currentTime;
-    }
+    // Note: Heartbeats are now sent by RaftElectionThread, not here
 
     if (commitState.isCommitIntervalReached()) {
       // send out begin commit
@@ -147,20 +140,6 @@ class RaftCoordinator extends Channel {
 
     if (commitState.isCommitTimedOut()) {
       commit(true);
-    }
-  }
-
-  private void sendRaftHeartbeat() {
-    if (raftState.isLeader()) {
-      Event event =
-          new Event(
-              config.connectGroupId(),
-              new RaftHeartbeat(config.taskId(), raftState.getCurrentTerm()));
-      send(event);
-      LOG.debug(
-          "Sent Raft heartbeat from leader {} for term {}",
-          config.taskId(),
-          raftState.getCurrentTerm());
     }
   }
 

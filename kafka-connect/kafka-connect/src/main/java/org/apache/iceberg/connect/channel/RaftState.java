@@ -23,7 +23,6 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,7 +49,15 @@ class RaftState {
 
   private static final Logger LOG = LoggerFactory.getLogger(RaftState.class);
 
-  /** Raft node states */
+    public String getCurrentLeader() {
+        return currentLeader;
+    }
+
+    public void setCurrentLeader(String currentLeader) {
+        this.currentLeader = currentLeader;
+    }
+
+    /** Raft node states */
   enum State {
     FOLLOWER,
     CANDIDATE,
@@ -124,7 +131,7 @@ class RaftState {
   }
 
   /** Returns required number of votes for quorum (majority) */
-  private int quorum() {
+  int quorum() {
     return (clusterSize / 2) + 1;
   }
 
@@ -173,6 +180,12 @@ class RaftState {
    * @return true if vote is granted
    */
   boolean handleVoteRequest(String candidateId, long term) {
+    // Ignore vote requests from self (should be filtered by RaftWorker, but defensive check)
+    if (candidateId.equals(nodeId)) {
+      LOG.trace("Node {} ignoring vote request from self", nodeId);
+      return false;
+    }
+
     // If candidate's term is older, reject
     if (term < currentTerm.get()) {
       LOG.debug(
@@ -220,12 +233,17 @@ class RaftState {
    * @param voterId ID of voter
    * @param term Term of vote
    * @param voteGranted Whether vote was granted
-   * @return true if this node became leader
    */
-  boolean handleVoteResponse(String voterId, long term, boolean voteGranted) {
+  void handleVoteResponse(String voterId, long term, boolean voteGranted) {
+    // Ignore vote responses from self (should be filtered by RaftWorker, but defensive check)
+    if (voterId.equals(nodeId)) {
+      LOG.trace("Node {} ignoring vote response from self", nodeId);
+      return;
+    }
+
     // Ignore votes from old terms
     if (term < currentTerm.get()) {
-      return false;
+      return;
     }
 
     // If we see a newer term, step down
@@ -235,12 +253,12 @@ class RaftState {
       state = State.FOLLOWER;
       votedFor.set(null);
       currentLeader = null;
-      return false;
+      return;
     }
 
     // Only process votes if we're a candidate
     if (state != State.CANDIDATE) {
-      return false;
+      return;
     }
 
     if (voteGranted) {
@@ -255,11 +273,9 @@ class RaftState {
       // Check if we have majority
       if (votesReceived.size() >= quorum()) {
         becomeLeader();
-        return true;
       }
     }
 
-    return false;
   }
 
   /**
@@ -269,6 +285,12 @@ class RaftState {
    * @param term Term of leader
    */
   void handleHeartbeat(String leaderId, long term) {
+    // Ignore heartbeats from self (should be filtered by RaftWorker, but defensive check)
+    if (leaderId.equals(nodeId)) {
+      LOG.trace("Node {} ignoring heartbeat from self", nodeId);
+      return;
+    }
+
     // If heartbeat is from old term, ignore
     if (term < currentTerm.get()) {
       return;
@@ -307,24 +329,9 @@ class RaftState {
     lastHeartbeatTime = System.currentTimeMillis();
   }
 
-  /** Returns current node state */
-  State getState() {
-    return state;
-  }
-
   /** Returns current term */
   long getCurrentTerm() {
     return currentTerm.get();
-  }
-
-  /** Returns current leader ID (null if no known leader) */
-  String getCurrentLeader() {
-    return currentLeader;
-  }
-
-  /** Returns this node's ID */
-  String getNodeId() {
-    return nodeId;
   }
 
   /** Returns whether this node is the leader */
@@ -332,23 +339,21 @@ class RaftState {
     return state == State.LEADER;
   }
 
-  /** Returns the configured heartbeat interval in milliseconds */
-  long getHeartbeatIntervalMs() {
-    return heartbeatIntervalMs;
-  }
-
-  /** Resets election timeout (used when receiving valid messages) */
-  void resetElectionTimeout() {
+  /** Resets heartbeat time (used by leader after sending heartbeat) */
+  void resetHeartbeatTime() {
     lastHeartbeatTime = System.currentTimeMillis();
   }
 
-  @VisibleForTesting
-  long getElectionTimeout() {
-    return electionTimeout;
+  /** Returns current cluster size */
+  int getClusterSize() {
+    return clusterSize;
   }
 
-  @VisibleForTesting
-  void setElectionTimeout(long timeout) {
-    this.electionTimeout = timeout;
+  /** Returns number of votes received in current election */
+  int getVoteCount() {
+    synchronized (votesReceived) {
+      return votesReceived.size();
+    }
   }
+
 }
