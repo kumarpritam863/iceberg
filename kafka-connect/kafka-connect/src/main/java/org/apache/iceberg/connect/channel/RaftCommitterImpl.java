@@ -235,13 +235,6 @@ public class RaftCommitterImpl implements Committer, RaftElectionThread.RaftElec
 
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
-    // Stop background election thread first
-    if (electionThread != null) {
-      LOG.info("Stopping Raft election thread for task {}", config.taskId());
-      electionThread.stop();
-      electionThread = null;
-    }
-
     // Always try to stop the worker to avoid duplicates
     stopWorker();
 
@@ -254,6 +247,7 @@ public class RaftCommitterImpl implements Committer, RaftElectionThread.RaftElec
     // Empty partitions → task was stopped explicitly. Stop coordinator if running
     if (closedPartitions.isEmpty()) {
       LOG.info("Task stopped. Closing coordinator.");
+      stopElectionThread();
       stopCoordinator();
       return;
     }
@@ -265,6 +259,15 @@ public class RaftCommitterImpl implements Committer, RaftElectionThread.RaftElec
         config.connectorName(),
         config.taskId());
     KafkaUtils.seekToLastCommittedOffsets(context);
+  }
+
+  private void stopElectionThread() {
+    // Stop background election thread first
+    if (electionThread != null) {
+      LOG.info("Stopping Raft election thread for task {}", config.taskId());
+      electionThread.stop();
+      electionThread = null;
+    }
   }
 
   @Override
