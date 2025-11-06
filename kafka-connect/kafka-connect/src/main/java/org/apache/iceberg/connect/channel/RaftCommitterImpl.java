@@ -20,15 +20,16 @@ package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -41,8 +42,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>Automatic leader election using Raft consensus algorithm
  *   <li>Split-brain prevention via majority quorum
- *   <li>Fast failover (5-10 seconds)
- *   <li>Zero coordinator churn during rebalancing
+ *   <li>Fast fail over (5-10 seconds)
+ *   <li>Zero coordinator churn during re-balancing
  *   <li>No external dependencies (no ZooKeeper/etcd)
  * </ul>
  */
@@ -56,10 +57,25 @@ public class RaftCommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
+  private final AtomicReference<Collection<MemberDescription>> members = new AtomicReference<>();
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
   // Raft consensus state
   private RaftState raftState;
+
+  @FunctionalInterface
+  interface AdminFunction<T> {
+    T apply(Admin admin) throws Exception;
+  }
+
+  <T> T withAdmin(AdminFunction<T> fn, String purpose) {
+    try (Admin admin = clientFactory.createAdmin()) {
+      return fn.apply(admin);
+    } catch (Exception ex) {
+      LOG.error("Error performing {}", purpose, ex);
+      throw new ConnectException(String.format("Error performing %s", purpose), ex);
+    }
+  }
 
   private void initialize(
       Catalog icebergCatalog,
@@ -94,18 +110,13 @@ public class RaftCommitterImpl implements Committer {
    * @return true if this task is the Raft leader (coordinator)
    */
   private boolean isLeader() {
-    ConsumerGroupDescription groupDesc;
-    try (Admin admin = clientFactory.createAdmin()) {
-      groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
+    // If already leader, don't trigger new elections
+    if (raftState.isLeader()) {
+      return true;
     }
-
-    Collection<MemberDescription> members = groupDesc.members();
-
-    // Update Raft state with current cluster size for quorum calculation
-    raftState.updateClusterSize(members.size());
-
-    // Check if we should start an election
-    if (raftState.isElectionTimeoutExpired() && !raftState.isLeader()) {
+    raftState.updateClusterSize(members.get().size());
+    // Check if we should start an election (only for non-leaders)
+    if (raftState.isElectionTimeoutExpired()) {
       LOG.info("Election timeout expired, starting new election");
       if (raftState.startElection()) {
         // Send RequestVote to all members via control topic
@@ -160,7 +171,7 @@ public class RaftCommitterImpl implements Committer {
   void handleRaftHeartbeat(String leaderId, long term) {
     raftState.handleHeartbeat(leaderId, term);
 
-    // If we receive heartbeat and we're currently coordinator, step down
+    // If we receive heartbeat, and we're currently coordinator, step down
     if (coordinatorThread != null && !raftState.isLeader()) {
       LOG.info(
           "Task {} received heartbeat from new leader {}, stepping down",
@@ -189,6 +200,7 @@ public class RaftCommitterImpl implements Committer {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
     // With Raft, coordinator election is done via consensus, not partition assignment
     // So we don't immediately start coordinator here
+    updateMembers();
   }
 
   @Override
@@ -216,6 +228,7 @@ public class RaftCommitterImpl implements Committer {
       return;
     }
 
+    updateMembers();
     // With Raft, we step down if we lose leader status, not based on partitions
     // Reset offsets to last committed to avoid data loss
     LOG.info(
@@ -223,6 +236,12 @@ public class RaftCommitterImpl implements Committer {
         config.connectorName(),
         config.taskId());
     KafkaUtils.seekToLastCommittedOffsets(context);
+  }
+
+  private void updateMembers() {
+    members.updateAndGet(current -> withAdmin(admin ->
+            KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin), String.format("GET_MEMBERS on task {%s-%s}", config.connectorName(), config.taskId())
+    ).members());
   }
 
   @Override
@@ -291,10 +310,5 @@ public class RaftCommitterImpl implements Committer {
       coordinatorThread.terminate();
       coordinatorThread = null;
     }
-  }
-
-  @VisibleForTesting
-  RaftState getRaftState() {
-    return raftState;
   }
 }
