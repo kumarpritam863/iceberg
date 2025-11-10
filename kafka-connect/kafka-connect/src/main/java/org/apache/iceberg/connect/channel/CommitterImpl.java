@@ -19,19 +19,18 @@
 package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.Collections;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.SinkWriter;
-import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
-import org.apache.kafka.common.ConsumerGroupState;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -47,8 +46,8 @@ public class CommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
-  private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
+  private RaftCoordinatorElector raftElector;
 
   private void initialize(
       Catalog icebergCatalog,
@@ -59,49 +58,8 @@ public class CommitterImpl implements Committer {
       this.config = icebergSinkConfig;
       this.context = sinkTaskContext;
       this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+      startWorker();
     }
-  }
-
-  static class TopicPartitionComparator implements Comparator<TopicPartition> {
-
-    @Override
-    public int compare(TopicPartition o1, TopicPartition o2) {
-      int result = o1.topic().compareTo(o2.topic());
-      if (result == 0) {
-        result = Integer.compare(o1.partition(), o2.partition());
-      }
-      return result;
-    }
-  }
-
-  private boolean hasLeaderPartition(Collection<TopicPartition> currentAssignedPartitions) {
-    ConsumerGroupDescription groupDesc;
-    try (Admin admin = clientFactory.createAdmin()) {
-      groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
-    }
-    if (groupDesc.state() == ConsumerGroupState.STABLE) {
-      Collection<MemberDescription> members = groupDesc.members();
-      if (containsFirstPartition(members, currentAssignedPartitions)) {
-        membersWhenWorkerIsCoordinator = members;
-        return true;
-      }
-    }
-    return false;
-  }
-
-  @VisibleForTesting
-  boolean containsFirstPartition(
-      Collection<MemberDescription> members, Collection<TopicPartition> partitions) {
-    // there should only be one task assigned partition 0 of the first topic,
-    // so elect that one the leader
-    TopicPartition firstTopicPartition =
-        members.stream()
-            .flatMap(member -> member.assignment().topicPartitions().stream())
-            .min(new TopicPartitionComparator())
-            .orElseThrow(
-                () -> new ConnectException("No partitions assigned, cannot determine leader"));
-
-    return partitions.contains(firstTopicPartition);
   }
 
   @Override
@@ -121,10 +79,13 @@ public class CommitterImpl implements Committer {
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
-    if (hasLeaderPartition(addedPartitions)) {
-      LOG.info("Committer received leader partition. Starting Coordinator.");
-      startCoordinator();
-    }
+
+    // Raft will automatically elect coordinator via consensus
+    // No need to check partitions - all tasks participate in election
+    LOG.info(
+        "[RAFT] Task {}-{} opened, Raft will handle coordinator election",
+        config.connectorName(),
+        config.taskId());
   }
 
   @Override
@@ -145,20 +106,23 @@ public class CommitterImpl implements Committer {
       return;
     }
 
-    // Empty partitions → task was stopped explicitly. Stop coordinator if running.
+    // Empty partitions → task was stopped explicitly. Stop Raft and coordinator.
     if (closedPartitions.isEmpty()) {
-      LOG.info("Task stopped. Closing coordinator.");
+      LOG.info("[RAFT] Task stopped. Stopping Raft and coordinator.");
+      if (raftElector != null) {
+        raftElector.stop();
+        raftElector = null;
+      }
       stopCoordinator();
       return;
     }
 
-    // Normal close: if leader partition is lost, stop coordinator.
-    if (hasLeaderPartition(closedPartitions)) {
-      LOG.info(
-          "Committer {}-{} lost leader partition. Stopping coordinator.",
-          config.connectorName(),
-          config.taskId());
-      stopCoordinator();
+    startWorker();
+    // Normal close with partition changes: update Raft cluster membership
+    if (raftElector != null) {
+      Set<String> remainingTasks = discoverAllTasks();
+      raftElector.updateNodes(remainingTasks);
+      LOG.info("[RAFT] Updated cluster membership to: {}", remainingTasks);
     }
 
     // Reset offsets to last committed to avoid data loss.
@@ -172,7 +136,6 @@ public class CommitterImpl implements Committer {
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
-      startWorker();
       worker.save(sinkRecords);
     }
     processControlEvents();
@@ -195,7 +158,70 @@ public class CommitterImpl implements Committer {
       LOG.info("Starting commit worker {}-{}", config.connectorName(), config.taskId());
       SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
+
+      // Initialize Raft election if not already initialized
+      if (raftElector == null) {
+        LOG.info("[RAFT] Initializing Raft consensus for task {}", config.taskId());
+
+        raftElector =
+            new RaftCoordinatorElector(config.taskId(), config.connectGroupId(), worker);
+
+        // Set listener for coordinator role changes
+        raftElector.setChangeListener(
+            new RaftCoordinatorElector.CoordinatorChangeListener() {
+              @Override
+              public void onBecameCoordinator(long term) {
+                LOG.warn(
+                    "[RAFT] Task {}-{} BECAME COORDINATOR via Raft election (term={})",
+                    config.connectorName(),
+                    config.taskId(),
+                    term);
+                startCoordinator();
+              }
+
+              @Override
+              public void onLostCoordinator(long term) {
+                LOG.warn(
+                    "[RAFT] Task {}-{} LOST COORDINATOR role (term={})",
+                    config.connectorName(),
+                    config.taskId(),
+                    term);
+                stopCoordinator();
+              }
+            });
+
+        // Discover all tasks in the cluster
+        Set<String> allTasks = discoverAllTasks();
+        LOG.info("[RAFT] Starting Raft with cluster: {}", allTasks);
+        raftElector.start(allTasks);
+      }
+
+      // Connect worker and raft
+      worker.setRaftElector(raftElector);
       worker.start();
+    }
+  }
+
+  private Set<String> discoverAllTasks() {
+    try (Admin admin = clientFactory.createAdmin()) {
+      ConsumerGroupDescription groupDesc =
+          KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
+
+      return groupDesc.members().stream()
+          .map(
+              member -> {
+                // Extract task ID from client ID (format: connector-name-task-N)
+                String clientId = member.clientId();
+                int lastDash = clientId.lastIndexOf('-');
+                if (lastDash > 0) {
+                  return clientId.substring(lastDash + 1);
+                }
+                return clientId;
+              })
+          .collect(Collectors.toSet());
+    } catch (Exception e) {
+      LOG.warn("[RAFT] Failed to discover all tasks, using self only", e);
+      return Collections.singleton(config.taskId());
     }
   }
 
@@ -205,8 +231,16 @@ public class CommitterImpl implements Committer {
           "Task {}-{} elected leader, starting commit coordinator",
           config.connectorName(),
           config.taskId());
-      Coordinator coordinator =
-          new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
+
+      // Fetch current consumer group members for coordinator initialization
+      Collection<MemberDescription> members;
+      try (Admin admin = clientFactory.createAdmin()) {
+        ConsumerGroupDescription groupDesc =
+            KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
+        members = groupDesc.members();
+      }
+
+      Coordinator coordinator = new Coordinator(catalog, config, members, clientFactory, context);
       coordinatorThread = new CoordinatorThread(coordinator);
       coordinatorThread.start();
     }

@@ -29,7 +29,15 @@ public enum PayloadType {
   /** Maps to payload of type {@link CommitToTable} */
   COMMIT_TO_TABLE(3),
   /** Maps to payload of type {@link CommitComplete} */
-  COMMIT_COMPLETE(4);
+  COMMIT_COMPLETE(4),
+  /** Maps to payload of type {@link RaftRequestVote} - Raft leader election vote request */
+  RAFT_REQUEST_VOTE(5),
+  /** Maps to payload of type {@link RaftVoteResponse} - Raft leader election vote response */
+  RAFT_VOTE_RESPONSE(6),
+  /** Maps to payload of type {@link RaftAppendEntries} - Raft heartbeat/log replication */
+  RAFT_APPEND_ENTRIES(7),
+  /** Maps to payload of type {@link RaftAppendResponse} - Raft heartbeat/log replication response */
+  RAFT_APPEND_RESPONSE(8);
 
   private final int id;
 
