@@ -47,7 +47,9 @@ public class CommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
+/*
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
+*/
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
 
   private void initialize(
@@ -81,10 +83,8 @@ public class CommitterImpl implements Committer {
     }
     if (groupDesc.state() == ConsumerGroupState.STABLE) {
       Collection<MemberDescription> members = groupDesc.members();
-      if (containsFirstPartition(members, currentAssignedPartitions)) {
-        membersWhenWorkerIsCoordinator = members;
-        return true;
-      }
+        /*membersWhenWorkerIsCoordinator = members;*/
+        return containsFirstPartition(members, currentAssignedPartitions);
     }
     return false;
   }
@@ -206,7 +206,7 @@ public class CommitterImpl implements Committer {
           config.connectorName(),
           config.taskId());
       Coordinator coordinator =
-          new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
+          new Coordinator(catalog, config, clientFactory, context);
       coordinatorThread = new CoordinatorThread(coordinator);
       coordinatorThread.start();
     }

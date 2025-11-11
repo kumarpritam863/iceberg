@@ -23,10 +23,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -48,10 +49,11 @@ import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
-import org.apache.iceberg.connect.events.StartCommit;
+import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.Tasks;
@@ -65,22 +67,30 @@ class Coordinator extends Channel {
 
   private static final Logger LOG = LoggerFactory.getLogger(Coordinator.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
-  private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
-  private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";
+/*  private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
+  private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";*/
   private static final Duration POLL_DURATION = Duration.ofSeconds(1);
 
   private final Catalog catalog;
   private final IcebergSinkConfig config;
+/*
   private final int totalPartitionCount;
+*/
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
+/*
   private final CommitState commitState;
+*/
   private volatile boolean terminated;
+
+  private final List<Envelope> commitBuffer = Lists.newArrayList();
+
+  private long startTime;
 
   Coordinator(
       Catalog catalog,
       IcebergSinkConfig config,
-      Collection<MemberDescription> members,
+      /*Collection<MemberDescription> members,*/
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
     // pass consumer group ID to which we commit low watermark offsets
@@ -88,8 +98,8 @@ class Coordinator extends Channel {
 
     this.catalog = catalog;
     this.config = config;
-    this.totalPartitionCount =
-        members.stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
+/*    this.totalPartitionCount =
+        members.stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();*/
     this.snapshotOffsetsProp =
         String.format(
             "kafka.connect.offsets.%s.%s", config.controlTopic(), config.connectGroupId());
@@ -104,81 +114,73 @@ class Coordinator extends Channel {
                 .setDaemon(true)
                 .setNameFormat("iceberg-committer" + "-%d")
                 .build());
+/*
     this.commitState = new CommitState(config);
+*/
+    this.startTime = System.currentTimeMillis();
   }
 
   void process() {
-    if (commitState.isCommitIntervalReached()) {
-      // send out begin commit
-      commitState.startNewCommit();
-      Event event =
-          new Event(config.connectGroupId(), new StartCommit(commitState.currentCommitId()));
-      send(event);
-      LOG.info("Commit {} initiated", commitState.currentCommitId());
-    }
-
+    // Workers now commit independently based on their own timer
+    // Coordinator no longer sends START_COMMIT events
     consumeAvailable(POLL_DURATION);
 
-    if (commitState.isCommitTimedOut()) {
-      commit(true);
+    // Commit when we have received data from all partitions
+    if (System.currentTimeMillis() - startTime > config.commitTimeoutMs()) {
+      commit();
     }
   }
 
   @Override
   protected boolean receive(Envelope envelope) {
-    switch (envelope.event().payload().type()) {
-      case DATA_WRITTEN:
-        commitState.addResponse(envelope);
-        return true;
-      case DATA_COMPLETE:
-        commitState.addReady(envelope);
-        if (commitState.isCommitReady(totalPartitionCount)) {
-          commit(false);
-        }
-        return true;
-    }
+      if (Objects.requireNonNull(envelope.event().payload().type()) == PayloadType.DATA_WRITTEN) {
+          commitBuffer.add(envelope);
+          return true;
+      }
     return false;
   }
 
-  private void commit(boolean partialCommit) {
+  private void commit() {
     try {
-      doCommit(partialCommit);
+      doCommit();
     } catch (Exception e) {
       LOG.warn("Commit failed, will try again next cycle", e);
     } finally {
-      commitState.endCurrentCommit();
+      startTime = System.currentTimeMillis();
     }
   }
 
-  private void doCommit(boolean partialCommit) {
-    Map<TableReference, List<Envelope>> commitMap = commitState.tableCommitMap();
+  private void doCommit() {
+    Map<TableReference, List<Envelope>> commitMap = commitBuffer.stream()
+            .collect(
+                    Collectors.groupingBy(
+                            envelope -> ((DataWritten) envelope.event().payload()).tableReference()));
 
     String offsetsJson = offsetsJson();
-    OffsetDateTime validThroughTs = commitState.validThroughTs(partialCommit);
 
     Tasks.foreach(commitMap.entrySet())
         .executeWith(exec)
         .stopOnFailure()
         .run(
             entry -> {
-              commitToTable(entry.getKey(), entry.getValue(), offsetsJson, validThroughTs);
+              commitToTable(entry.getKey(), entry.getValue(), offsetsJson);
             });
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
-    commitState.clearResponses();
+    commitBuffer.clear();
 
     Event event =
         new Event(
             config.connectGroupId(),
-            new CommitComplete(commitState.currentCommitId(), validThroughTs));
+            new CommitComplete(UUID.randomUUID(), null));
     send(event);
 
     LOG.info(
         "Commit {} complete, committed to {} table(s), valid-through {}",
-        commitState.currentCommitId(),
+        UUID.randomUUID(),
         commitMap.size(),
-        validThroughTs);
+        null);
   }
 
   private String offsetsJson() {
@@ -192,8 +194,7 @@ class Coordinator extends Channel {
   private void commitToTable(
       TableReference tableReference,
       List<Envelope> envelopeList,
-      String offsetsJson,
-      OffsetDateTime validThroughTs) {
+      String offsetsJson) {
     TableIdentifier tableIdentifier = tableReference.identifier();
     Table table;
     try {
@@ -246,10 +247,6 @@ class Coordinator extends Channel {
           appendOp.toBranch(branch);
         }
         appendOp.set(snapshotOffsetsProp, offsetsJson);
-        appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        if (validThroughTs != null) {
-          appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
-        }
         dataFiles.forEach(appendOp::appendFile);
         appendOp.commit();
       } else {
@@ -258,10 +255,6 @@ class Coordinator extends Channel {
           deltaOp.toBranch(branch);
         }
         deltaOp.set(snapshotOffsetsProp, offsetsJson);
-        deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        if (validThroughTs != null) {
-          deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
-        }
         dataFiles.forEach(deltaOp::addRows);
         deleteFiles.forEach(deltaOp::addDeletes);
         deltaOp.commit();
@@ -272,15 +265,15 @@ class Coordinator extends Channel {
           new Event(
               config.connectGroupId(),
               new CommitToTable(
-                  commitState.currentCommitId(), tableReference, snapshotId, validThroughTs));
+                  UUID.randomUUID(), tableReference, snapshotId, null));
       send(event);
 
       LOG.info(
           "Commit complete to table {}, snapshot {}, commit ID {}, valid-through {}",
           tableIdentifier,
           snapshotId,
-          commitState.currentCommitId(),
-          validThroughTs);
+          UUID.randomUUID(),
+          null);
     }
   }
 

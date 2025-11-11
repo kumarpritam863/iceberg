@@ -165,7 +165,7 @@ public class TestCoordinator extends ChannelTestBase {
 
     SinkTaskContext context = mock(SinkTaskContext.class);
     Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+        new Coordinator(catalog, config, clientFactory, context);
     coordinator.start();
 
     // init consumer after subscribe()

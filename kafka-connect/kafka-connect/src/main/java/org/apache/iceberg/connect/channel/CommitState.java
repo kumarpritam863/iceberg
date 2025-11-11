@@ -15,7 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- */
+ *//*
+
 package org.apache.iceberg.connect.channel;
 
 import java.time.OffsetDateTime;
@@ -37,9 +38,7 @@ class CommitState {
   private static final Logger LOG = LoggerFactory.getLogger(CommitState.class);
 
   private final List<Envelope> commitBuffer = Lists.newArrayList();
-  private final List<DataComplete> readyBuffer = Lists.newArrayList();
   private long startTime;
-  private UUID currentCommitId;
   private final IcebergSinkConfig config;
 
   CommitState(IcebergSinkConfig config) {
@@ -48,30 +47,6 @@ class CommitState {
 
   void addResponse(Envelope envelope) {
     commitBuffer.add(envelope);
-    if (!isCommitInProgress()) {
-      DataWritten dataWritten = (DataWritten) envelope.event().payload();
-      LOG.warn(
-          "Received commit response when no commit in progress, this can happen during recovery. Commit ID: {}",
-          dataWritten.commitId());
-    }
-  }
-
-  void addReady(Envelope envelope) {
-    DataComplete dataComplete = (DataComplete) envelope.event().payload();
-    readyBuffer.add(dataComplete);
-    if (!isCommitInProgress()) {
-      LOG.warn(
-          "Received commit ready when no commit in progress, this can happen during recovery. Commit ID: {}",
-          dataComplete.commitId());
-    }
-  }
-
-  UUID currentCommitId() {
-    return currentCommitId;
-  }
-
-  boolean isCommitInProgress() {
-    return currentCommitId != null;
   }
 
   boolean isCommitIntervalReached() {
@@ -165,3 +140,4 @@ class CommitState {
     return result;
   }
 }
+*/

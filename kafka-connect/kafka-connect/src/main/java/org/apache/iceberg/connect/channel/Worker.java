@@ -42,6 +42,7 @@ class Worker extends Channel {
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
+  private long lastCommitTime;
 
   Worker(
       IcebergSinkConfig config,
@@ -59,19 +60,21 @@ class Worker extends Channel {
     this.config = config;
     this.context = context;
     this.sinkWriter = sinkWriter;
+    this.lastCommitTime = System.currentTimeMillis();
   }
 
   void process() {
-    consumeAvailable(Duration.ZERO);
+    //consumeAvailable(Duration.ZERO);
+
+    // Check if worker commit interval has elapsed
+    long currentTime = System.currentTimeMillis();
+    if (currentTime - lastCommitTime >= config.workerCommitIntervalMs()) {
+      performCommit();
+      lastCommitTime = currentTime;
+    }
   }
 
-  @Override
-  protected boolean receive(Envelope envelope) {
-    Event event = envelope.event();
-    if (event.payload().type() != PayloadType.START_COMMIT) {
-      return false;
-    }
-
+  private void performCommit() {
     SinkWriterResult results = sinkWriter.completeWrite();
 
     // include all assigned topic partitions even if no messages were read
@@ -90,7 +93,8 @@ class Worker extends Channel {
                 })
             .collect(Collectors.toList());
 
-    UUID commitId = ((StartCommit) event.payload()).commitId();
+    // Generate worker-side commitId for independent commits
+    UUID commitId = UUID.randomUUID();
 
     List<Event> events =
         results.writerResults().stream()
@@ -110,8 +114,12 @@ class Worker extends Channel {
     events.add(readyEvent);
 
     send(events, results.sourceOffsets());
+  }
 
-    return true;
+  @Override
+  protected boolean receive(Envelope envelope) {
+    // Workers no longer respond to START_COMMIT events from coordinator
+    return false;
   }
 
   @Override

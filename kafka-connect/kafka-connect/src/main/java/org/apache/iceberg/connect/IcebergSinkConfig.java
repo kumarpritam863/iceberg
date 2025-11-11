@@ -83,6 +83,8 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String CONTROL_GROUP_ID_PREFIX_PROP = "iceberg.control.group-id-prefix";
   private static final String COMMIT_INTERVAL_MS_PROP = "iceberg.control.commit.interval-ms";
   private static final int COMMIT_INTERVAL_MS_DEFAULT = 300_000;
+  private static final String WORKER_COMMIT_INTERVAL_MS_PROP = "iceberg.worker.commit.interval-ms";
+  private static final int WORKER_COMMIT_INTERVAL_MS_DEFAULT = 300000;
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
   private static final int COMMIT_TIMEOUT_MS_DEFAULT = 30_000;
   private static final String COMMIT_THREADS_PROP = "iceberg.control.commit.threads";
@@ -205,6 +207,12 @@ public class IcebergSinkConfig extends AbstractConfig {
         COMMIT_INTERVAL_MS_DEFAULT,
         Importance.MEDIUM,
         "Coordinator interval for performing Iceberg table commits, in millis");
+    configDef.define(
+        WORKER_COMMIT_INTERVAL_MS_PROP,
+        ConfigDef.Type.INT,
+        WORKER_COMMIT_INTERVAL_MS_DEFAULT,
+        Importance.MEDIUM,
+        "Worker interval for flushing data files independently without waiting for coordinator, in millis");
     configDef.define(
         COMMIT_TIMEOUT_MS_PROP,
         ConfigDef.Type.INT,
@@ -409,6 +417,10 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public int commitIntervalMs() {
     return getInt(COMMIT_INTERVAL_MS_PROP);
+  }
+
+  public int workerCommitIntervalMs() {
+    return getInt(WORKER_COMMIT_INTERVAL_MS_PROP);
   }
 
   public int commitTimeoutMs() {
