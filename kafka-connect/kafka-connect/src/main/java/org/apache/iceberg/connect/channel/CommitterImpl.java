@@ -30,7 +30,6 @@ import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -94,14 +93,11 @@ public class CommitterImpl implements Committer {
       Collection<MemberDescription> members, Collection<TopicPartition> partitions) {
     // there should only be one task assigned partition 0 of the first topic,
     // so elect that one the leader
-    TopicPartition firstTopicPartition =
-        members.stream()
-            .flatMap(member -> member.assignment().topicPartitions().stream())
-            .min(new TopicPartitionComparator())
-            .orElseThrow(
-                () -> new ConnectException("No partitions assigned, cannot determine leader"));
-
-    return partitions.contains(firstTopicPartition);
+    return members.stream()
+        .flatMap(member -> member.assignment().topicPartitions().stream())
+        .min(new TopicPartitionComparator())
+        .map(partitions::contains)
+        .orElse(false);
   }
 
   @Override
