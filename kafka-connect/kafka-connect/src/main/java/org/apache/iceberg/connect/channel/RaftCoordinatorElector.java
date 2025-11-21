@@ -217,10 +217,10 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
       }
 
       // Grant vote if:
-      // 1. Request term >= current term
+      // 1. Request term == current term (NOT >=, to prevent double voting in same term)
       // 2. Haven't voted yet, OR already voted for this candidate
       // 3. Candidate's log is at least as up-to-date (simplified: always true)
-      if (request.term() >= currentTerm
+      if (request.term() == currentTerm
           && (votedFor == null || votedFor.equals(request.candidateId()))) {
         voteGranted = true;
         votedFor = request.candidateId();
@@ -295,11 +295,13 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
     state = RaftState.LEADER;
 
     LOG.warn(
-        "[RAFT] [{}] *** BECAME LEADER *** (term={}, votes={}/{})",
+        "[RAFT] [{}] *** BECAME LEADER *** (term={}, votes={}/{}, voters={}, cluster={})",
         nodeId,
         currentTerm,
         votesReceived.size(),
-        allNodes.size());
+        allNodes.size(),
+        votesReceived,
+        allNodes);
 
     // Send immediate heartbeat to establish authority
     sendHeartbeats();

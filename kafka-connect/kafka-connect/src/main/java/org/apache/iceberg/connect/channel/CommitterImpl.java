@@ -205,18 +205,30 @@ public class CommitterImpl implements Committer {
       ConsumerGroupDescription groupDesc =
           KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
 
-      return groupDesc.members().stream()
+      LOG.debug("[RAFT] Discovering tasks from consumer group {} ({} members)",
+          config.connectGroupId(), groupDesc.members().size());
+
+      Set<String> tasks = groupDesc.members().stream()
           .map(
               member -> {
                 // Extract task ID from client ID (format: connector-name-task-N)
                 String clientId = member.clientId();
                 int lastDash = clientId.lastIndexOf('-');
+                String taskId;
                 if (lastDash > 0) {
-                  return clientId.substring(lastDash + 1);
+                  taskId = clientId.substring(lastDash + 1);
+                } else {
+                  taskId = clientId;
                 }
-                return clientId;
+                LOG.debug("[RAFT] Discovered member: clientId={}, extracted taskId={}",
+                    clientId, taskId);
+                return taskId;
               })
           .collect(Collectors.toSet());
+
+      LOG.info("[RAFT] Discovered {} tasks from group {}: {}",
+          tasks.size(), config.connectGroupId(), tasks);
+      return tasks;
     } catch (Exception e) {
       LOG.warn("[RAFT] Failed to discover all tasks, using self only", e);
       return Collections.singleton(config.taskId());
