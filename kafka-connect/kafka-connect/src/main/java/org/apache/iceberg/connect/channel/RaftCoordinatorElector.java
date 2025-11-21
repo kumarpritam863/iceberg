@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.connect.events.Payload;
@@ -64,8 +63,9 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
 
   // Raft timing constants (tuned for Kafka Connect environment)
   private static final Duration HEARTBEAT_INTERVAL = Duration.ofMillis(50);
+  // Increased timeout range to reduce probability of simultaneous elections
   private static final Duration MIN_ELECTION_TIMEOUT = Duration.ofMillis(150);
-  private static final Duration MAX_ELECTION_TIMEOUT = Duration.ofMillis(300);
+  private static final Duration MAX_ELECTION_TIMEOUT = Duration.ofMillis(500);
 
   /** Raft state machine */
   private enum RaftState {
@@ -81,8 +81,10 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
 
   // Raft state
   private volatile RaftState state = RaftState.FOLLOWER;
-  private long currentTerm = 0;
-  private String votedFor = null;
+  private volatile long currentTerm = 0;
+  private volatile String votedFor = null;
+  // Track which term we voted in to prevent multiple votes in same term
+  private volatile long votedInTerm = -1;
 
   // Cluster membership
   private final Set<String> allNodes = ConcurrentHashMap.newKeySet();
@@ -137,8 +139,7 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
       transport.start();
 
       // Start election timer
-      @SuppressWarnings("FutureReturnValueIgnored")
-      ScheduledFuture<?> unused = scheduler.scheduleAtFixedRate(this::tick, 0, 10, TimeUnit.MILLISECONDS);
+      scheduler.scheduleAtFixedRate(this::tick, 0, 10, TimeUnit.MILLISECONDS);
     }
   }
 
@@ -174,17 +175,32 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
   }
 
   /** Start leader election */
-  private void startElection() {
-    currentTerm++;
+  private synchronized void startElection() {
+    // Increment term FIRST before any other state changes
+    long newTerm = currentTerm + 1;
+
+    LOG.info(
+        "[RAFT] [{}] *** STARTING ELECTION *** (term: {} -> {}, timeout={}ms, lastVotedInTerm={})",
+        nodeId,
+        currentTerm,
+        newTerm,
+        electionTimeout.toMillis(),
+        votedInTerm);
+
+    currentTerm = newTerm;
     state = RaftState.CANDIDATE;
+
+    // Vote for self - this is the ONLY vote we grant in this term
     votedFor = nodeId;
+    votedInTerm = currentTerm;
+
     votesReceived.clear();
-    votesReceived.add(nodeId); // Vote for self
+    votesReceived.add(nodeId); // Count self vote
     electionTimeout = randomElectionTimeout();
     lastHeartbeatReceived = Instant.now();
 
     LOG.warn(
-        "[RAFT] [{}] *** STARTING ELECTION *** (term={}, timeout={}ms)",
+        "[RAFT] [{}] Became CANDIDATE in term {} (voted for self, timeout={}ms)",
         nodeId,
         currentTerm,
         electionTimeout.toMillis());
@@ -205,36 +221,78 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
    * Handle incoming RequestVote RPC (called via transport listener).
    *
    * @param request Vote request from candidate
-   * @param fromNode Candidate node ID
    */
-  public void handleRequestVote(RaftRequestVote request, String fromNode) {
-    boolean voteGranted = false;
+  public synchronized void handleRequestVote(RaftRequestVote request) {
+    boolean voteGranted;
 
-    synchronized (this) {
-      // Update term if necessary
-      if (request.term() > currentTerm) {
-        stepDown(request.term());
-      }
+    LOG.debug(
+        "[RAFT] [{}] Received RequestVote from {} (requestTerm={}, myTerm={}, votedFor={}, votedInTerm={})",
+        nodeId,
+        request.candidateId(),
+        request.term(),
+        currentTerm,
+        votedFor,
+        votedInTerm);
 
-      // Grant vote if:
-      // 1. Request term == current term (NOT >=, to prevent double voting in same term)
-      // 2. Haven't voted yet, OR already voted for this candidate
-      // 3. Candidate's log is at least as up-to-date (simplified: always true)
-      if (request.term() == currentTerm
-          && (votedFor == null || votedFor.equals(request.candidateId()))) {
-        voteGranted = true;
-        votedFor = request.candidateId();
-        lastHeartbeatReceived = Instant.now(); // Reset election timer
+    // Update term if necessary
+    if (request.term() > currentTerm) {
+      LOG.info(
+          "[RAFT] [{}] Discovered higher term {} > {} from {}, stepping down",
+          nodeId,
+          request.term(),
+          currentTerm,
+          request.candidateId());
+      stepDown(request.term());
+    }
 
-        LOG.info("[RAFT] [{}] VOTED for {} (term={})", nodeId, request.candidateId(), request.term());
-      } else {
-        LOG.debug(
-            "[RAFT] [{}] REJECTED vote for {} (term={}, votedFor={})",
-            nodeId,
-            request.candidateId(),
-            request.term(),
-            votedFor);
-      }
+    // Reject stale requests
+    if (request.term() < currentTerm) {
+      LOG.debug(
+          "[RAFT] [{}] REJECTED vote for {} - stale term (request={} < current={})",
+          nodeId,
+          request.candidateId(),
+          request.term(),
+          currentTerm);
+      voteGranted = false;
+    }
+    // Grant vote if we haven't voted in this term yet
+    else if (request.term() == currentTerm && votedInTerm < currentTerm) {
+      // First vote request in this term - grant it
+      voteGranted = true;
+      votedFor = request.candidateId();
+      votedInTerm = currentTerm;
+      lastHeartbeatReceived = Instant.now(); // Reset election timer
+
+      LOG.info(
+          "[RAFT] [{}] GRANTED vote to {} in term {} (first vote in this term)",
+          nodeId,
+          request.candidateId(),
+          request.term());
+    }
+    // Allow idempotent retry from same candidate in same term
+    else if (request.term() == currentTerm
+        && votedInTerm == currentTerm
+        && votedFor != null
+        && votedFor.equals(request.candidateId())) {
+      voteGranted = true;
+      lastHeartbeatReceived = Instant.now(); // Reset election timer
+
+      LOG.debug(
+          "[RAFT] [{}] GRANTED vote to {} in term {} (idempotent retry)",
+          nodeId,
+          request.candidateId(),
+          request.term());
+    }
+    // Reject - already voted for someone else in this term
+    else {
+      voteGranted = false;
+      LOG.info(
+          "[RAFT] [{}] REJECTED vote for {} in term {} (already voted for {} in term {})",
+          nodeId,
+          request.candidateId(),
+          request.term(),
+          votedFor,
+          votedInTerm);
     }
 
     // Send vote response
@@ -247,34 +305,53 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
    *
    * @param response Vote response from follower
    */
-  public void handleVoteResponse(RaftVoteResponse response) {
-    synchronized (this) {
-      // Ignore if not candidate or stale response
-      if (state != RaftState.CANDIDATE || response.term() < currentTerm) {
-        return;
-      }
-
-      // Step down if higher term
-      if (response.term() > currentTerm) {
-        stepDown(response.term());
-        return;
-      }
-
-      // Record vote
-      if (response.voteGranted()) {
-        votesReceived.add(response.voterId());
-        int majoritySize = (allNodes.size() / 2) + 1;
-        LOG.debug(
-            "[RAFT] [{}] Received vote from {} ({}/{})",
-            nodeId,
-            response.voterId(),
-            votesReceived.size(),
-            majoritySize);
-      }
-
-      // Check if won election
-      checkElectionResult();
+  public synchronized void handleVoteResponse(RaftVoteResponse response) {
+    // Ignore if not candidate or stale response
+    if (state != RaftState.CANDIDATE || response.term() < currentTerm) {
+      LOG.trace(
+          "[RAFT] [{}] Ignoring VoteResponse from {} (state={}, responseTerm={}, currentTerm={})",
+          nodeId,
+          response.voterId(),
+          state,
+          response.term(),
+          currentTerm);
+      return;
     }
+
+    // Step down if higher term
+    if (response.term() > currentTerm) {
+      LOG.info(
+          "[RAFT] [{}] Received VoteResponse with higher term {} > {} from {}, stepping down",
+          nodeId,
+          response.term(),
+          currentTerm,
+          response.voterId());
+      stepDown(response.term());
+      return;
+    }
+
+    // Record vote
+    if (response.voteGranted()) {
+      votesReceived.add(response.voterId());
+      int majoritySize = (allNodes.size() / 2) + 1;
+      LOG.info(
+          "[RAFT] [{}] Received GRANTED vote from {} in term {} ({}/{} votes, majority={})",
+          nodeId,
+          response.voterId(),
+          response.term(),
+          votesReceived.size(),
+          allNodes.size(),
+          majoritySize);
+    } else {
+      LOG.debug(
+          "[RAFT] [{}] Received REJECTED vote from {} in term {}",
+          nodeId,
+          response.voterId(),
+          response.term());
+    }
+
+    // Check if won election
+    checkElectionResult();
   }
 
   /** Check if won the election */
@@ -291,17 +368,27 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
   }
 
   /** Transition to LEADER */
-  private void becomeLeader() {
+  private synchronized void becomeLeader() {
+    if (state != RaftState.CANDIDATE) {
+      LOG.error(
+          "[RAFT] [{}] CRITICAL: Attempted to become LEADER from invalid state {} (term={})",
+          nodeId,
+          state,
+          currentTerm);
+      return;
+    }
+
     state = RaftState.LEADER;
 
     LOG.warn(
-        "[RAFT] [{}] *** BECAME LEADER *** (term={}, votes={}/{}, voters={}, cluster={})",
+        "[RAFT] [{}] *** BECAME LEADER *** (term={}, votes={}/{}, voters={}, cluster={}, votedInTerm={})",
         nodeId,
         currentTerm,
         votesReceived.size(),
         allNodes.size(),
         votesReceived,
-        allNodes);
+        allNodes,
+        votedInTerm);
 
     // Send immediate heartbeat to establish authority
     sendHeartbeats();
@@ -335,36 +422,61 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
    *
    * @param request Heartbeat from leader
    */
-  public void handleAppendEntries(RaftAppendEntries request) {
-    boolean success = false;
+  public synchronized void handleAppendEntries(RaftAppendEntries request) {
 
-    synchronized (this) {
-      // Update term if necessary
-      if (request.term() > currentTerm) {
-        stepDown(request.term());
-      }
+      LOG.trace(
+        "[RAFT] [{}] Received AppendEntries from {} (requestTerm={}, myTerm={}, myState={})",
+        nodeId,
+        request.leaderId(),
+        request.term(),
+        currentTerm,
+        state);
 
-      // Reject stale requests
-      if (request.term() < currentTerm) {
-        RaftAppendResponse response = new RaftAppendResponse(currentTerm, false, nodeId);
-        transport.send(response, groupId);
-        return;
-      }
-
-      // Valid heartbeat from leader
-      if (state == RaftState.CANDIDATE) {
-        // Another node became leader, step down
-        stepDown(request.term());
-      }
-
-      lastHeartbeatReceived = Instant.now(); // Reset election timer
-      success = true;
-
-      LOG.trace("[RAFT] [{}] Received heartbeat from leader {} (term={})", nodeId, request.leaderId(), request.term());
+    // Update term if necessary
+    if (request.term() > currentTerm) {
+      LOG.info(
+          "[RAFT] [{}] Received heartbeat with higher term {} > {} from leader {}, stepping down",
+          nodeId,
+          request.term(),
+          currentTerm,
+          request.leaderId());
+      stepDown(request.term());
     }
 
+    // Reject stale requests
+    if (request.term() < currentTerm) {
+      LOG.debug(
+          "[RAFT] [{}] Rejecting stale AppendEntries from {} (requestTerm={} < currentTerm={})",
+          nodeId,
+          request.leaderId(),
+          request.term(),
+          currentTerm);
+      RaftAppendResponse response = new RaftAppendResponse(currentTerm, false, nodeId);
+      transport.send(response, groupId);
+      return;
+    }
+
+    // Valid heartbeat from leader in current term
+    if (state == RaftState.CANDIDATE) {
+      // Another node became leader, step down
+      LOG.info(
+          "[RAFT] [{}] Received valid heartbeat from leader {} in term {}, stepping down from CANDIDATE",
+          nodeId,
+          request.leaderId(),
+          request.term());
+      stepDown(request.term());
+    }
+
+    lastHeartbeatReceived = Instant.now(); // Reset election timer
+
+      LOG.trace(
+        "[RAFT] [{}] Accepted heartbeat from leader {} in term {}",
+        nodeId,
+        request.leaderId(),
+        request.term());
+
     // Send success response
-    RaftAppendResponse response = new RaftAppendResponse(currentTerm, success, nodeId);
+    RaftAppendResponse response = new RaftAppendResponse(currentTerm, true, nodeId);
     transport.send(response, groupId);
   }
 
@@ -385,7 +497,7 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
 
     switch (payload.type()) {
       case RAFT_REQUEST_VOTE:
-        handleRequestVote((RaftRequestVote) payload, senderId);
+        handleRequestVote((RaftRequestVote) payload);
         break;
 
       case RAFT_VOTE_RESPONSE:
@@ -406,13 +518,21 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
   }
 
   /** Step down to FOLLOWER */
-  private void stepDown(long newTerm) {
+  private synchronized void stepDown(long newTerm) {
     long oldTerm = currentTerm;
+    boolean termChanged = false;
+
     if (newTerm > currentTerm) {
-      LOG.debug("[RAFT] [{}] Discovered higher term {} (current={}), stepping down",
-          nodeId, newTerm, currentTerm);
+      LOG.info(
+          "[RAFT] [{}] Discovered higher term {} (current={}), stepping down and clearing vote",
+          nodeId,
+          newTerm,
+          currentTerm);
       currentTerm = newTerm;
+      // Critical: Reset vote state when entering new term
       votedFor = null;
+      votedInTerm = -1;
+      termChanged = true;
     }
 
     boolean wasLeader = (state == RaftState.LEADER);
@@ -421,16 +541,24 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
     lastHeartbeatReceived = Instant.now();
 
     if (wasLeader) {
-      LOG.warn("[RAFT] [{}] Stepping down from LEADER to FOLLOWER (term: {} → {})",
-          nodeId, oldTerm, currentTerm);
+      LOG.warn(
+          "[RAFT] [{}] Stepping down from LEADER to FOLLOWER (term: {} → {}, cleared vote state)",
+          nodeId,
+          oldTerm,
+          currentTerm);
 
       // Notify listener
       if (changeListener != null) {
         changeListener.onLostCoordinator(currentTerm);
       }
     } else if (oldState != RaftState.FOLLOWER) {
-      LOG.debug("[RAFT] [{}] Stepping down from {} to FOLLOWER (term: {} → {})",
-          nodeId, oldState, oldTerm, currentTerm);
+      LOG.debug(
+          "[RAFT] [{}] Stepping down from {} to FOLLOWER (term: {} → {}, termChanged={})",
+          nodeId,
+          oldState,
+          oldTerm,
+          currentTerm,
+          termChanged);
     }
   }
 
@@ -473,24 +601,6 @@ public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessage
             nodeId, allNodes.size(), majoritySize);
       }
     }
-  }
-
-  /**
-   * Check if this node is currently the coordinator
-   *
-   * @return true if leader, false otherwise
-   */
-  public boolean isCoordinator() {
-    return state == RaftState.LEADER;
-  }
-
-  /**
-   * Get current Raft term
-   *
-   * @return current term number
-   */
-  public long getCurrentTerm() {
-    return currentTerm;
   }
 
   /**
