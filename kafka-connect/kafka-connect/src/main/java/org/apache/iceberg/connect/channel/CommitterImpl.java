@@ -42,24 +42,60 @@ public class CommitterImpl implements Committer {
 
   private CoordinatorThread coordinatorThread;
   private Worker worker;
-  private Catalog catalog;
-  private IcebergSinkConfig config;
-  private SinkTaskContext context;
-  private KafkaClientFactory clientFactory;
+  private final Catalog catalog;
+  private final IcebergSinkConfig config;
+  private final SinkTaskContext context;
+  private final KafkaClientFactory clientFactory;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
   private RaftCoordinatorElector raftElector;
 
-  private void initialize(
-      Catalog icebergCatalog,
-      IcebergSinkConfig icebergSinkConfig,
-      SinkTaskContext sinkTaskContext) {
-    if (isInitialized.compareAndSet(false, true)) {
-      this.catalog = icebergCatalog;
-      this.config = icebergSinkConfig;
-      this.context = sinkTaskContext;
-      this.clientFactory = new KafkaClientFactory(config.kafkaProps());
-      startWorker();
-    }
+    public CommitterImpl(Catalog catalog, IcebergSinkConfig config, SinkTaskContext context) {
+    this.catalog = catalog;
+    this.config = config;
+    this.context = context;
+    this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+    LOG.info("[RAFT] Initializing Raft consensus for task {}", config.taskId());
+
+    // Create dedicated transport for election messages
+        RaftElectionTransport raftTransport = new KafkaRaftElectionTransport(
+                config.electionTopic(),
+                config.taskId(),
+                config.kafkaProps().get("bootstrap.servers"),
+                config.connectGroupId()
+        );
+
+    // Create Raft elector with dedicated transport
+    raftElector =
+            new RaftCoordinatorElector(config.taskId(), config.connectGroupId(), raftTransport);
+
+    // Set listener for coordinator role changes
+    raftElector.setChangeListener(
+            new RaftCoordinatorElector.CoordinatorChangeListener() {
+              @Override
+              public void onBecameCoordinator(long term) {
+                LOG.warn(
+                        "[RAFT] Task {}-{} BECAME COORDINATOR via Raft election (term={})",
+                        config.connectorName(),
+                        config.taskId(),
+                        term);
+                startCoordinator();
+              }
+
+              @Override
+              public void onLostCoordinator(long term) {
+                LOG.warn(
+                        "[RAFT] Task {}-{} LOST COORDINATOR role (term={})",
+                        config.connectorName(),
+                        config.taskId(),
+                        term);
+                stopCoordinator();
+              }
+            });
+
+    // Discover all tasks in the cluster
+    Set<String> allTasks = discoverAllTasks();
+    LOG.info("[RAFT] Starting Raft with cluster: {}", allTasks);
+    raftElector.start(allTasks);
   }
 
   @Override
@@ -78,7 +114,7 @@ public class CommitterImpl implements Committer {
       IcebergSinkConfig icebergSinkConfig,
       SinkTaskContext sinkTaskContext,
       Collection<TopicPartition> addedPartitions) {
-    initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
+    startWorker();
 
     // Raft will automatically elect coordinator via consensus
     // No need to check partitions - all tasks participate in election
@@ -159,45 +195,7 @@ public class CommitterImpl implements Committer {
       SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
 
-      // Initialize Raft election if not already initialized
-      if (raftElector == null) {
-        LOG.info("[RAFT] Initializing Raft consensus for task {}", config.taskId());
-
-        raftElector =
-            new RaftCoordinatorElector(config.taskId(), config.connectGroupId(), worker);
-
-        // Set listener for coordinator role changes
-        raftElector.setChangeListener(
-            new RaftCoordinatorElector.CoordinatorChangeListener() {
-              @Override
-              public void onBecameCoordinator(long term) {
-                LOG.warn(
-                    "[RAFT] Task {}-{} BECAME COORDINATOR via Raft election (term={})",
-                    config.connectorName(),
-                    config.taskId(),
-                    term);
-                startCoordinator();
-              }
-
-              @Override
-              public void onLostCoordinator(long term) {
-                LOG.warn(
-                    "[RAFT] Task {}-{} LOST COORDINATOR role (term={})",
-                    config.connectorName(),
-                    config.taskId(),
-                    term);
-                stopCoordinator();
-              }
-            });
-
-        // Discover all tasks in the cluster
-        Set<String> allTasks = discoverAllTasks();
-        LOG.info("[RAFT] Starting Raft with cluster: {}", allTasks);
-        raftElector.start(allTasks);
-      }
-
-      // Connect worker and raft
-      worker.setRaftElector(raftElector);
+      // Start worker (elections are handled independently by transport)
       worker.start();
     }
   }

@@ -20,25 +20,24 @@ package org.apache.iceberg.connect.channel;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collection;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.apache.iceberg.connect.events.Event;
+import org.apache.iceberg.connect.events.Payload;
 import org.apache.iceberg.connect.events.RaftAppendEntries;
 import org.apache.iceberg.connect.events.RaftAppendResponse;
 import org.apache.iceberg.connect.events.RaftRequestVote;
 import org.apache.iceberg.connect.events.RaftVoteResponse;
-import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Raft-based coordinator election using Kafka control topic for RPC communication.
+ * Raft-based coordinator election using dedicated Kafka election topic for RPC communication.
  *
  * <p>GUARANTEES:
  *
@@ -49,7 +48,8 @@ import org.slf4j.LoggerFactory;
  *   <li>Network partition safe (majority quorum required)
  * </ul>
  *
- * <p>Communication happens via existing Channel infrastructure using Raft-specific event payloads:
+ * <p>Communication happens via dedicated {@link RaftElectionTransport} with separate topic,
+ * consumer, and producer - completely decoupled from main data flow:
  *
  * <ul>
  *   <li>{@link RaftRequestVote} - Vote requests during leader election
@@ -58,7 +58,7 @@ import org.slf4j.LoggerFactory;
  *   <li>{@link RaftAppendResponse} - Heartbeat acknowledgments
  * </ul>
  */
-public class RaftCoordinatorElector {
+public class RaftCoordinatorElector implements RaftElectionTransport.RaftMessageListener {
 
   private static final Logger LOG = LoggerFactory.getLogger(RaftCoordinatorElector.class);
 
@@ -77,7 +77,7 @@ public class RaftCoordinatorElector {
   // Node identity
   private final String nodeId;
   private final String groupId;
-  private final Worker channel;
+  private final RaftElectionTransport transport;
 
   // Raft state
   private volatile RaftState state = RaftState.FOLLOWER;
@@ -101,11 +101,21 @@ public class RaftCoordinatorElector {
   // Coordinator change listener
   private CoordinatorChangeListener changeListener;
 
-  public RaftCoordinatorElector(String nodeId, String groupId, Worker channel) {
+  /**
+   * Create a new Raft coordinator elector.
+   *
+   * @param nodeId This node's unique identifier
+   * @param groupId Election group ID
+   * @param transport Dedicated transport layer for election messages
+   */
+  public RaftCoordinatorElector(String nodeId, String groupId, RaftElectionTransport transport) {
     this.nodeId = nodeId;
     this.groupId = groupId;
-    this.channel = channel;
+    this.transport = transport;
     this.electionTimeout = randomElectionTimeout();
+
+    // Register as message listener
+    transport.setMessageListener(this);
   }
 
   /**
@@ -123,8 +133,12 @@ public class RaftCoordinatorElector {
           initialNodes,
           groupId);
 
+      // Start election transport
+      transport.start();
+
       // Start election timer
-      scheduler.scheduleAtFixedRate(this::tick, 0, 10, TimeUnit.MILLISECONDS);
+      @SuppressWarnings("FutureReturnValueIgnored")
+      ScheduledFuture<?> unused = scheduler.scheduleAtFixedRate(this::tick, 0, 10, TimeUnit.MILLISECONDS);
     }
   }
 
@@ -140,7 +154,10 @@ public class RaftCoordinatorElector {
       case FOLLOWER:
       case CANDIDATE:
         // Check if election timeout elapsed
+        long timeSinceHeartbeat = Duration.between(lastHeartbeatReceived, now).toMillis();
         if (Duration.between(lastHeartbeatReceived, now).compareTo(electionTimeout) >= 0) {
+          LOG.debug("[RAFT] [{}] Election timeout expired ({}ms since last heartbeat, timeout={}ms, state={})",
+              nodeId, timeSinceHeartbeat, electionTimeout.toMillis(), state);
           startElection();
         }
         break;
@@ -148,6 +165,7 @@ public class RaftCoordinatorElector {
       case LEADER:
         // Send periodic heartbeats
         if (Duration.between(lastHeartbeatSent, now).compareTo(HEARTBEAT_INTERVAL) >= 0) {
+          LOG.trace("[RAFT] [{}] Heartbeat interval expired, sending heartbeats", nodeId);
           sendHeartbeats();
           lastHeartbeatSent = now;
         }
@@ -175,7 +193,7 @@ public class RaftCoordinatorElector {
     for (String node : allNodes) {
       if (!node.equals(nodeId)) {
         RaftRequestVote voteRequest = new RaftRequestVote(currentTerm, nodeId, 0, 0);
-        channel.send(new Event(groupId, voteRequest));
+        transport.send(voteRequest, groupId);
       }
     }
 
@@ -184,7 +202,7 @@ public class RaftCoordinatorElector {
   }
 
   /**
-   * Handle incoming RequestVote RPC
+   * Handle incoming RequestVote RPC (called via transport listener).
    *
    * @param request Vote request from candidate
    * @param fromNode Candidate node ID
@@ -221,11 +239,11 @@ public class RaftCoordinatorElector {
 
     // Send vote response
     RaftVoteResponse response = new RaftVoteResponse(currentTerm, voteGranted, nodeId);
-    channel.send(new Event(groupId, response));
+    transport.send(response, groupId);
   }
 
   /**
-   * Handle incoming VoteResponse
+   * Handle incoming VoteResponse (called via transport listener).
    *
    * @param response Vote response from follower
    */
@@ -263,7 +281,12 @@ public class RaftCoordinatorElector {
   private void checkElectionResult() {
     int majoritySize = (allNodes.size() / 2) + 1;
     if (state == RaftState.CANDIDATE && votesReceived.size() >= majoritySize) {
+      LOG.info("[RAFT] [{}] Won election with {}/{} votes (majority={})",
+          nodeId, votesReceived.size(), allNodes.size(), majoritySize);
       becomeLeader();
+    } else if (state == RaftState.CANDIDATE) {
+      LOG.debug("[RAFT] [{}] Still collecting votes ({}/{}, need {})",
+          nodeId, votesReceived.size(), allNodes.size(), majoritySize);
     }
   }
 
@@ -300,13 +323,13 @@ public class RaftCoordinatorElector {
                 0, // prevLogTerm (simplified)
                 0, // leaderCommit (simplified)
                 true); // isHeartbeat
-        channel.send(new Event(groupId, heartbeat));
+        transport.send(heartbeat, groupId);
       }
     }
   }
 
   /**
-   * Handle incoming AppendEntries (heartbeat)
+   * Handle incoming AppendEntries (heartbeat) (called via transport listener).
    *
    * @param request Heartbeat from leader
    */
@@ -322,7 +345,7 @@ public class RaftCoordinatorElector {
       // Reject stale requests
       if (request.term() < currentTerm) {
         RaftAppendResponse response = new RaftAppendResponse(currentTerm, false, nodeId);
-        channel.send(new Event(groupId, response));
+        transport.send(response, groupId);
         return;
       }
 
@@ -340,27 +363,72 @@ public class RaftCoordinatorElector {
 
     // Send success response
     RaftAppendResponse response = new RaftAppendResponse(currentTerm, success, nodeId);
-    channel.send(new Event(groupId, response));
+    transport.send(response, groupId);
+  }
+
+  /**
+   * Handle incoming Raft message from transport layer.
+   * Implements {@link RaftElectionTransport.RaftMessageListener}.
+   *
+   * @param payload The Raft message payload
+   * @param senderId The sender's node ID
+   * @param groupId The election group ID
+   */
+  @Override
+  public void onMessage(Payload payload, String senderId, String groupId) {
+    // Only process messages for our group
+    if (!this.groupId.equals(groupId)) {
+      return;
+    }
+
+    switch (payload.type()) {
+      case RAFT_REQUEST_VOTE:
+        handleRequestVote((RaftRequestVote) payload, senderId);
+        break;
+
+      case RAFT_VOTE_RESPONSE:
+        handleVoteResponse((RaftVoteResponse) payload);
+        break;
+
+      case RAFT_APPEND_ENTRIES:
+        handleAppendEntries((RaftAppendEntries) payload);
+        break;
+
+      case RAFT_APPEND_RESPONSE:
+        // Leader processes append responses (future: log replication)
+        break;
+
+      default:
+        LOG.warn("[RAFT] [{}] Received unexpected payload type: {}", nodeId, payload.type());
+    }
   }
 
   /** Step down to FOLLOWER */
   private void stepDown(long newTerm) {
+    long oldTerm = currentTerm;
     if (newTerm > currentTerm) {
+      LOG.debug("[RAFT] [{}] Discovered higher term {} (current={}), stepping down",
+          nodeId, newTerm, currentTerm);
       currentTerm = newTerm;
       votedFor = null;
     }
 
     boolean wasLeader = (state == RaftState.LEADER);
+    RaftState oldState = state;
     state = RaftState.FOLLOWER;
     lastHeartbeatReceived = Instant.now();
 
     if (wasLeader) {
-      LOG.warn("[RAFT] [{}] Stepping down from LEADER to FOLLOWER (term={})", nodeId, currentTerm);
+      LOG.warn("[RAFT] [{}] Stepping down from LEADER to FOLLOWER (term: {} → {})",
+          nodeId, oldTerm, currentTerm);
 
       // Notify listener
       if (changeListener != null) {
         changeListener.onLostCoordinator(currentTerm);
       }
+    } else if (oldState != RaftState.FOLLOWER) {
+      LOG.debug("[RAFT] [{}] Stepping down from {} to FOLLOWER (term: {} → {})",
+          nodeId, oldState, oldTerm, currentTerm);
     }
   }
 
@@ -375,19 +443,32 @@ public class RaftCoordinatorElector {
       allNodes.clear();
       allNodes.addAll(newNodes);
 
+      Set<String> added = newNodes.stream()
+          .filter(n -> !oldNodes.contains(n))
+          .collect(java.util.stream.Collectors.toSet());
+      Set<String> removed = oldNodes.stream()
+          .filter(n -> !newNodes.contains(n))
+          .collect(java.util.stream.Collectors.toSet());
+
       LOG.info(
-          "[RAFT] [{}] Cluster membership changed: {} -> {} (state={}, term={})",
+          "[RAFT] [{}] Cluster membership changed: {} → {} (state={}, term={}, added={}, removed={})",
           nodeId,
           oldNodes,
           newNodes,
           state,
-          currentTerm);
+          currentTerm,
+          added.isEmpty() ? "none" : added,
+          removed.isEmpty() ? "none" : removed);
 
       // Check if lost quorum
       int majoritySize = (allNodes.size() / 2) + 1;
       if (state == RaftState.LEADER && allNodes.size() < majoritySize) {
-        LOG.warn("[RAFT] [{}] Lost quorum, stepping down from LEADER", nodeId);
+        LOG.warn("[RAFT] [{}] Lost quorum (cluster size {} < majority {}), stepping down from LEADER",
+            nodeId, allNodes.size(), majoritySize);
         stepDown(currentTerm);
+      } else if (state == RaftState.LEADER) {
+        LOG.debug("[RAFT] [{}] Still have quorum as LEADER ({}/{})",
+            nodeId, allNodes.size(), majoritySize);
       }
     }
   }
@@ -438,6 +519,9 @@ public class RaftCoordinatorElector {
         Thread.currentThread().interrupt();
         scheduler.shutdownNow();
       }
+
+      // Stop transport layer
+      transport.stop();
     }
   }
 

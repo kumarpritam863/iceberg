@@ -19,6 +19,7 @@
 package org.apache.iceberg.connect.channel;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 
 import java.util.List;
 import java.util.Optional;
@@ -33,7 +34,7 @@ public class TestCommitterImpl {
 
   @Test
   public void testIsLeader() {
-    CommitterImpl committer = new CommitterImpl();
+    CommitterImpl committer = new CommitterImpl(any(), any(), any());
 
     MemberAssignment assignment1 =
         new MemberAssignment(

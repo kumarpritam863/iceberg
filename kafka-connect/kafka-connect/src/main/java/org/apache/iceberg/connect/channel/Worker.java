@@ -34,10 +34,6 @@ import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
-import org.apache.iceberg.connect.events.RaftRequestVote;
-import org.apache.iceberg.connect.events.RaftVoteResponse;
-import org.apache.iceberg.connect.events.RaftAppendEntries;
-import org.apache.iceberg.connect.events.RaftAppendResponse;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
@@ -46,7 +42,6 @@ class Worker extends Channel {
   private final IcebergSinkConfig config;
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
-  private RaftCoordinatorElector raftElector;
 
   Worker(
       IcebergSinkConfig config,
@@ -70,40 +65,9 @@ class Worker extends Channel {
     consumeAvailable(Duration.ZERO);
   }
 
-  void setRaftElector(RaftCoordinatorElector elector) {
-    this.raftElector = elector;
-  }
-
   @Override
   protected boolean receive(Envelope envelope) {
     Event event = envelope.event();
-
-    // Handle Raft events FIRST (before data events)
-    if (raftElector != null) {
-      switch (event.payload().type()) {
-        case RAFT_REQUEST_VOTE:
-          raftElector.handleRequestVote(
-              (RaftRequestVote) event.payload(),
-              event.id().toString()); // Use event ID as sender identifier
-          return true;
-
-        case RAFT_VOTE_RESPONSE:
-          raftElector.handleVoteResponse((RaftVoteResponse) event.payload());
-          return true;
-
-        case RAFT_APPEND_ENTRIES:
-          raftElector.handleAppendEntries((RaftAppendEntries) event.payload());
-          return true;
-
-        case RAFT_APPEND_RESPONSE:
-          // Leader processes append responses (future: log replication)
-          return true;
-
-        default:
-          // Fall through to data event handling
-          break;
-      }
-    }
 
     // Handle data commit events
     if (event.payload().type() != PayloadType.START_COMMIT) {

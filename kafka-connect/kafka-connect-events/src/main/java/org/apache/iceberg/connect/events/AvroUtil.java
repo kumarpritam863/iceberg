@@ -69,6 +69,39 @@ public class AvroUtil {
     }
   }
 
+  /**
+   * Encode a Payload (without Event wrapper) for direct Raft message transmission.
+   *
+   * @param payload The payload to encode
+   * @return Serialized bytes
+   */
+  public static byte[] encodePayload(Payload payload) {
+    try {
+      if (payload != null) {
+          return AvroEncoderUtil.encode((IndexedRecord) payload, payload.getSchema());
+      }
+      throw new IllegalArgumentException("Payload must implement IndexedRecord: " + payload.getClass());
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
+   * Decode a Payload from bytes using the payload type name.
+   *
+   * @param bytes Serialized payload data
+   * @return Decoded payload
+   */
+  public static Payload decodePayload(byte[] bytes) {
+    try {
+      return AvroEncoderUtil.decode(bytes);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    } finally {
+      DecoderResolver.clearCache();
+    }
+  }
+
   static Schema convert(Types.StructType icebergSchema, Class<? extends IndexedRecord> javaClass) {
     return convert(icebergSchema, javaClass, FIELD_ID_TO_CLASS);
   }

@@ -80,6 +80,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String TABLES_SCHEMA_CASE_INSENSITIVE_PROP =
       "iceberg.tables.schema-case-insensitive";
   private static final String CONTROL_TOPIC_PROP = "iceberg.control.topic";
+  private static final String ELECTION_TOPIC_PROP = "iceberg.election.topic";
   private static final String CONTROL_GROUP_ID_PREFIX_PROP = "iceberg.control.group-id-prefix";
   private static final String COMMIT_INTERVAL_MS_PROP = "iceberg.control.commit.interval-ms";
   private static final int COMMIT_INTERVAL_MS_DEFAULT = 300_000;
@@ -97,6 +98,7 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   private static final String DEFAULT_CATALOG_NAME = "iceberg";
   private static final String DEFAULT_CONTROL_TOPIC = "control-iceberg";
+  private static final String DEFAULT_ELECTION_TOPIC = "election-iceberg";
   public static final String DEFAULT_CONTROL_GROUP_PREFIX = "cg-control-";
 
   public static final int SCHEMA_UPDATE_RETRIES = 2; // 3 total attempts
@@ -186,7 +188,13 @@ public class IcebergSinkConfig extends AbstractConfig {
         ConfigDef.Type.STRING,
         DEFAULT_CONTROL_TOPIC,
         Importance.MEDIUM,
-        "Name of the control topic");
+        "Name of the control topic for data commit coordination");
+    configDef.define(
+        ELECTION_TOPIC_PROP,
+        ConfigDef.Type.STRING,
+        DEFAULT_ELECTION_TOPIC,
+        Importance.MEDIUM,
+        "Name of the dedicated election topic for Raft coordinator election (separate from control topic)");
     configDef.define(
         CONTROL_GROUP_ID_PREFIX_PROP,
         ConfigDef.Type.STRING,
@@ -390,6 +398,10 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public String controlTopic() {
     return getString(CONTROL_TOPIC_PROP);
+  }
+
+  public String electionTopic() {
+    return getString(ELECTION_TOPIC_PROP);
   }
 
   public String controlGroupIdPrefix() {
