@@ -86,15 +86,19 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
           "RLE_DICTIONARY",
           "DELTA_BINARY_PACKED",
           "DELTA_LENGTH_BYTE_ARRAY",
-          "DELTA_BYTE_ARRAY");
+          "DELTA_BYTE_ARRAY",
+          "BYTE_STREAM_SPLIT");
   private static final Map<String, PrimitiveType> GOLDEN_FILE_TYPES =
-      ImmutableMap.of(
-          "string", Types.StringType.get(),
-          "float", Types.FloatType.get(),
-          "int32", Types.IntegerType.get(),
-          "int64", Types.LongType.get(),
-          "binary", Types.BinaryType.get(),
-          "boolean", Types.BooleanType.get());
+      ImmutableMap.<String, PrimitiveType>builder()
+          .put("string", Types.StringType.get())
+          .put("float", Types.FloatType.get())
+          .put("double", Types.DoubleType.get())
+          .put("int32", Types.IntegerType.get())
+          .put("int64", Types.LongType.get())
+          .put("binary", Types.BinaryType.get())
+          .put("boolean", Types.BooleanType.get())
+          .put("uuid", Types.UUIDType.get())
+          .buildOrThrow();
 
   static final Function<Record, Record> IDENTITY = record -> record;
 
@@ -209,8 +213,7 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
       Map<Integer, Object> idToConstant)
       throws IOException {
     // write a test parquet file using iceberg writer
-    File testFile = File.createTempFile("junit", null, temp.toFile());
-    assertThat(testFile.delete()).as("Delete should succeed").isTrue();
+    File testFile = temp.resolve("data.parquet").toFile();
 
     try (FileAppender<Record> writer = getParquetWriter(writeSchema, testFile)) {
       writer.addAll(expected);
@@ -386,8 +389,7 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
             optional(102, "float_data", Types.FloatType.get()),
             optional(103, "decimal_data", Types.DecimalType.of(10, 5)));
 
-    File dataFile = File.createTempFile("junit", null, temp.toFile());
-    assertThat(dataFile.delete()).as("Delete should succeed").isTrue();
+    File dataFile = temp.resolve("data.parquet").toFile();
     Iterable<Record> data =
         generateData(writeSchema, 30000, 0L, RandomData.DEFAULT_NULL_PERCENTAGE, IDENTITY);
     try (FileAppender<Record> writer = getParquetWriter(writeSchema, dataFile)) {
@@ -419,8 +421,7 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
             optional(107, "string_data", Types.StringType.get()),
             optional(108, "binary_data", Types.BinaryType.get()));
 
-    File dataFile = File.createTempFile("junit", null, temp.toFile());
-    assertThat(dataFile.delete()).as("Delete should succeed").isTrue();
+    File dataFile = temp.resolve("data.parquet").toFile();
     Iterable<Record> data =
         generateData(schema, 30000, 0L, RandomData.DEFAULT_NULL_PERCENTAGE, IDENTITY);
     try (FileAppender<Record> writer = getParquetV2Writer(schema, dataFile)) {
@@ -433,8 +434,7 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
   public void testUnsupportedReadsForParquetV2() throws Exception {
     // Some types use delta encoding and which are not supported for vectorized reads
     Schema schema = new Schema(SUPPORTED_PRIMITIVES.fields());
-    File dataFile = File.createTempFile("junit", null, temp.toFile());
-    assertThat(dataFile.delete()).as("Delete should succeed").isTrue();
+    File dataFile = temp.resolve("data.parquet").toFile();
     Iterable<Record> data =
         generateData(schema, 30000, 0L, RandomData.DEFAULT_NULL_PERCENTAGE, IDENTITY);
     try (FileAppender<Record> writer = getParquetV2Writer(schema, dataFile)) {
@@ -452,8 +452,7 @@ public class TestParquetVectorizedReads extends AvroDataTestBase {
     int numRows = 1;
     Schema schema = new Schema(optional(100, "uuid", Types.UUIDType.get()));
 
-    File dataFile = File.createTempFile("junit", null, temp.toFile());
-    assertThat(dataFile.delete()).as("Delete should succeed").isTrue();
+    File dataFile = temp.resolve("data.parquet").toFile();
     Iterable<Record> data = generateData(schema, numRows, 0L, 0, IDENTITY);
     try (FileAppender<Record> writer = getParquetV2Writer(schema, dataFile)) {
       writer.addAll(data);
