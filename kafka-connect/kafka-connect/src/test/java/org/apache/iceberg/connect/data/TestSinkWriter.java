@@ -209,7 +209,8 @@ public class TestSinkWriter {
     SinkWriterResult result = sinkWriter.completeWrite();
 
     // offsets must be keyed by the ORIGINAL topic, not the transformed one
-    Offset offset = result.sourceOffsets().get(new TopicPartition(originalTopic, originalPartition));
+    Offset offset =
+        result.sourceOffsets().get(new TopicPartition(originalTopic, originalPartition));
     assertThat(offset).isNotNull();
     assertThat(offset.offset()).isEqualTo(originalOffset + 1);
     assertThat(offset.timestamp()).isEqualTo(now.atOffset(ZoneOffset.UTC));

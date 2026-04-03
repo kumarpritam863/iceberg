@@ -83,8 +83,7 @@ public class TestIntegrationDynamicTable extends IntegrationTestBase {
               .config("iceberg.tables.route-field", "srcTopic")
               .config("transforms", "rewriteTopic,insertTopic")
               .config(
-                  "transforms.rewriteTopic.type",
-                  "org.apache.kafka.connect.transforms.RegexRouter")
+                  "transforms.rewriteTopic.type", "org.apache.kafka.connect.transforms.RegexRouter")
               .config("transforms.rewriteTopic.regex", ".*")
               .config("transforms.rewriteTopic.replacement", TEST_DB + "." + smtTable)
               .config(
