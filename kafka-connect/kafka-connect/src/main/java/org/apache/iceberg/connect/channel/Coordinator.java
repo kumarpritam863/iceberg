@@ -47,6 +47,7 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.data.ConnectorMetrics;
 import org.apache.iceberg.connect.events.CommitComplete;
 import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataWritten;
@@ -80,6 +81,7 @@ class Coordinator extends Channel {
   private final String snapshotOffsetsProp;
   private final ExecutorService exec;
   private final CommitState commitState;
+  private final ConnectorMetrics metrics;
   private volatile boolean terminated;
 
   Coordinator(
@@ -87,7 +89,8 @@ class Coordinator extends Channel {
       IcebergSinkConfig config,
       Collection<MemberDescription> members,
       KafkaClientFactory clientFactory,
-      SinkTaskContext context) {
+      SinkTaskContext context,
+      ConnectorMetrics metrics) {
     // pass consumer group ID to which we commit low watermark offsets
     super("coordinator", config.connectGroupId() + "-coord", config, clientFactory, context);
 
@@ -110,6 +113,7 @@ class Coordinator extends Channel {
                 .setNameFormat("iceberg-committer" + "-%d")
                 .build());
     this.commitState = new CommitState(config);
+    this.metrics = metrics;
   }
 
   void process() {
@@ -125,6 +129,7 @@ class Coordinator extends Channel {
     consumeAvailable(POLL_DURATION);
 
     if (commitState.isCommitTimedOut()) {
+      metrics.commitTimedOut();
       commit(true);
     }
   }
@@ -146,9 +151,13 @@ class Coordinator extends Channel {
   }
 
   private void commit(boolean partialCommit) {
+    metrics.commitStarted();
+    long startMs = System.currentTimeMillis();
     try {
       doCommit(partialCommit);
+      metrics.commitSucceeded(System.currentTimeMillis() - startMs);
     } catch (Exception e) {
+      metrics.commitFailed(System.currentTimeMillis() - startMs);
       LOG.warn("Commit failed, will try again next cycle", e);
     } finally {
       commitState.endCurrentCommit();

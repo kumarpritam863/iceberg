@@ -48,10 +48,12 @@ class IcebergWriterFactory {
 
   private final Catalog catalog;
   private final IcebergSinkConfig config;
+  private final ConnectorMetrics metrics;
 
-  IcebergWriterFactory(Catalog catalog, IcebergSinkConfig config) {
+  IcebergWriterFactory(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.catalog = catalog;
     this.config = config;
+    this.metrics = metrics;
   }
 
   RecordWriter createWriter(String tableName, SinkRecord sample, boolean ignoreMissingTable) {
@@ -77,7 +79,7 @@ class IcebergWriterFactory {
     }
     TableReference tableReference = TableReference.of(catalog.name(), identifier, tableUuid);
 
-    return new IcebergWriter(table, tableReference, config);
+    return new IcebergWriter(table, tableReference, config, metrics);
   }
 
   @VisibleForTesting
@@ -125,6 +127,7 @@ class IcebergWriterFactory {
                 result.set(catalog.loadTable(identifier));
               }
             });
+    metrics.tableAutoCreated(tableName);
     return result.get();
   }
 

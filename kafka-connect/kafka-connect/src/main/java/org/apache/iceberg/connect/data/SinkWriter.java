@@ -37,14 +37,17 @@ import org.apache.kafka.connect.sink.SinkRecord;
 public class SinkWriter {
   private final IcebergSinkConfig config;
   private final IcebergWriterFactory writerFactory;
+  private final ConnectorMetrics metrics;
   private final Map<String, RecordWriter> writers;
   private final Map<TopicPartition, Offset> sourceOffsets;
 
-  public SinkWriter(Catalog catalog, IcebergSinkConfig config) {
+  public SinkWriter(Catalog catalog, IcebergSinkConfig config, ConnectorMetrics metrics) {
     this.config = config;
-    this.writerFactory = new IcebergWriterFactory(catalog, config);
+    this.writerFactory = new IcebergWriterFactory(catalog, config, metrics);
+    this.metrics = metrics;
     this.writers = Maps.newHashMap();
     this.sourceOffsets = Maps.newHashMap();
+    metrics.registerActiveWriters(writers::size);
   }
 
   public void close() {
@@ -65,6 +68,7 @@ public class SinkWriter {
   }
 
   public void save(Collection<SinkRecord> sinkRecords) {
+    metrics.recordsReceived(sinkRecords.size());
     sinkRecords.forEach(this::save);
   }
 

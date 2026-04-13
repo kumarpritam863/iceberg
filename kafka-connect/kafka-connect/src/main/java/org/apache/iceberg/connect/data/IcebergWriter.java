@@ -37,15 +37,21 @@ class IcebergWriter implements RecordWriter {
   private final Table table;
   private final TableReference tableReference;
   private final IcebergSinkConfig config;
+  private final ConnectorMetrics metrics;
   private final List<IcebergWriterResult> writerResults;
 
   private RecordConverter recordConverter;
   private TaskWriter<Record> writer;
 
-  IcebergWriter(Table table, TableReference tableReference, IcebergSinkConfig config) {
+  IcebergWriter(
+      Table table,
+      TableReference tableReference,
+      IcebergSinkConfig config,
+      ConnectorMetrics metrics) {
     this.table = table;
     this.tableReference = tableReference;
     this.config = config;
+    this.metrics = metrics;
     this.writerResults = Lists.newArrayList();
     initNewWriter();
   }
@@ -62,8 +68,10 @@ class IcebergWriter implements RecordWriter {
       if (record.value() != null) {
         Record row = convertToRow(record);
         writer.write(row);
+        metrics.recordWritten(tableReference.identifier().toString());
       }
     } catch (Exception e) {
+      metrics.recordConversionError(tableReference.identifier().toString());
       throw new DataException(
           String.format(
               Locale.ROOT,
@@ -92,18 +100,26 @@ class IcebergWriter implements RecordWriter {
       initNewWriter();
       // convert the row again, this time using the new table schema
       row = recordConverter.convert(record.value(), null);
+      metrics.schemaEvolved(tableReference.identifier().toString());
     }
 
     return row;
   }
 
   private void flush() {
+    long startMs = System.currentTimeMillis();
     WriteResult writeResult;
     try {
       writeResult = writer.complete();
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
+
+    int dataFileCount = writeResult.dataFiles().length;
+    int deleteFileCount = writeResult.deleteFiles().length;
+    String tableName = tableReference.identifier().toString();
+    metrics.filesWritten(tableName, dataFileCount, deleteFileCount);
+    metrics.flushCompleted(tableName, System.currentTimeMillis() - startMs);
 
     writerResults.add(
         new IcebergWriterResult(
