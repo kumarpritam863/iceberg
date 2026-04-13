@@ -42,11 +42,10 @@ public class TestBackpressureController {
     return context;
   }
 
-  private static IcebergSinkConfig mockConfig(boolean enabled, long high, long low) {
+  private static IcebergSinkConfig mockConfig(boolean enabled, long high) {
     IcebergSinkConfig config = mock(IcebergSinkConfig.class);
     when(config.backpressureEnabled()).thenReturn(enabled);
     when(config.backpressureMaxBufferedRecords()).thenReturn(high);
-    when(config.backpressureResumeBufferedRecords()).thenReturn(low);
     return config;
   }
 
@@ -66,7 +65,7 @@ public class TestBackpressureController {
   @Test
   public void testDisabledNeverPauses() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(false, 100, 50);
+    IcebergSinkConfig config = mockConfig(false, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     for (int i = 0; i < 200; i++) {
@@ -80,7 +79,7 @@ public class TestBackpressureController {
   @Test
   public void testPauseAtHighWatermark() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(true, 100, 50);
+    IcebergSinkConfig config = mockConfig(true, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     for (int i = 0; i < 100; i++) {
@@ -94,7 +93,7 @@ public class TestBackpressureController {
   @Test
   public void testNoPauseBeforeHighWatermark() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(true, 100, 50);
+    IcebergSinkConfig config = mockConfig(true, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     for (int i = 0; i < 99; i++) {
@@ -108,7 +107,7 @@ public class TestBackpressureController {
   @Test
   public void testResumeAfterFlush() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(true, 100, 50);
+    IcebergSinkConfig config = mockConfig(true, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     // trigger pause
@@ -128,7 +127,7 @@ public class TestBackpressureController {
   @Test
   public void testIdempotentPause() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(true, 100, 50);
+    IcebergSinkConfig config = mockConfig(true, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     // go well past high watermark
@@ -144,7 +143,7 @@ public class TestBackpressureController {
   @Test
   public void testBufferedRecordCount() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(false, Long.MAX_VALUE, 0);
+    IcebergSinkConfig config = mockConfig(false, Long.MAX_VALUE);
     BackpressureController bp = new BackpressureController(context, config);
 
     assertThat(bp.bufferedRecords()).isEqualTo(0);
@@ -157,7 +156,7 @@ public class TestBackpressureController {
   @Test
   public void testResetOnFlush() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(false, Long.MAX_VALUE, 0);
+    IcebergSinkConfig config = mockConfig(false, Long.MAX_VALUE);
     BackpressureController bp = new BackpressureController(context, config);
 
     bp.recordBuffered();
@@ -172,7 +171,7 @@ public class TestBackpressureController {
   public void testPauseResumeWithEmptyAssignment() {
     SinkTaskContext context = mock(SinkTaskContext.class);
     when(context.assignment()).thenReturn(Set.of());
-    IcebergSinkConfig config = mockConfig(true, 10, 5);
+    IcebergSinkConfig config = mockConfig(true, 10);
     BackpressureController bp = new BackpressureController(context, config);
 
     // should not throw even with empty assignment
@@ -190,7 +189,7 @@ public class TestBackpressureController {
   @Test
   public void testFlushWithoutPauseDoesNotResume() {
     SinkTaskContext context = mockContext();
-    IcebergSinkConfig config = mockConfig(true, 100, 50);
+    IcebergSinkConfig config = mockConfig(true, 100);
     BackpressureController bp = new BackpressureController(context, config);
 
     // buffer some records but stay below watermark
