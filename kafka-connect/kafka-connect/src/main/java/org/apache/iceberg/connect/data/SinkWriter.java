@@ -37,12 +37,19 @@ import org.apache.kafka.connect.sink.SinkRecord;
 public class SinkWriter {
   private final IcebergSinkConfig config;
   private final IcebergWriterFactory writerFactory;
+  private final BackpressureController backpressure;
   private final Map<String, RecordWriter> writers;
   private final Map<TopicPartition, Offset> sourceOffsets;
 
   public SinkWriter(Catalog catalog, IcebergSinkConfig config) {
+    this(catalog, config, BackpressureController.NOOP);
+  }
+
+  public SinkWriter(
+      Catalog catalog, IcebergSinkConfig config, BackpressureController backpressure) {
     this.config = config;
     this.writerFactory = new IcebergWriterFactory(catalog, config);
+    this.backpressure = backpressure;
     this.writers = Maps.newHashMap();
     this.sourceOffsets = Maps.newHashMap();
   }
@@ -60,6 +67,8 @@ public class SinkWriter {
 
     writers.clear();
     sourceOffsets.clear();
+
+    backpressure.recordsFlushed();
 
     return new SinkWriterResult(writerResults, offsets);
   }
@@ -84,6 +93,8 @@ public class SinkWriter {
     } else {
       routeRecordStatically(record);
     }
+
+    backpressure.recordBuffered();
   }
 
   private void routeRecordStatically(SinkRecord record) {

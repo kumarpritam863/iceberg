@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
+import org.apache.iceberg.connect.data.BackpressureController;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.kafka.clients.admin.Admin;
@@ -193,7 +194,8 @@ public class CommitterImpl implements Committer {
   private void startWorker() {
     if (null == this.worker) {
       LOG.info("Starting commit worker {}-{}", config.connectorName(), config.taskId());
-      SinkWriter sinkWriter = new SinkWriter(catalog, config);
+      BackpressureController backpressure = new BackpressureController(context, config);
+      SinkWriter sinkWriter = new SinkWriter(catalog, config, backpressure);
       worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
     }

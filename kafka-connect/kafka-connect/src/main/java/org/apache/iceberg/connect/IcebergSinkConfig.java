@@ -90,6 +90,13 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
   private static final String HADOOP_CONF_DIR_PROP = "iceberg.hadoop-conf-dir";
+  private static final String BACKPRESSURE_ENABLED_PROP = "iceberg.backpressure.enabled";
+  private static final String BACKPRESSURE_MAX_RECORDS_PROP =
+      "iceberg.backpressure.max-buffered-records";
+  private static final String BACKPRESSURE_RESUME_RECORDS_PROP =
+      "iceberg.backpressure.resume-buffered-records";
+  private static final long BACKPRESSURE_MAX_RECORDS_DEFAULT = 1_000_000L;
+  private static final long BACKPRESSURE_RESUME_RECORDS_DEFAULT = 500_000L;
 
   private static final String NAME_PROP = "name";
   private static final String TASK_ID = "task.id";
@@ -235,6 +242,24 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        BACKPRESSURE_ENABLED_PROP,
+        ConfigDef.Type.BOOLEAN,
+        false,
+        Importance.MEDIUM,
+        "Set to true to enable backpressure via pause/resume when buffered records exceed the high watermark");
+    configDef.define(
+        BACKPRESSURE_MAX_RECORDS_PROP,
+        ConfigDef.Type.LONG,
+        BACKPRESSURE_MAX_RECORDS_DEFAULT,
+        Importance.MEDIUM,
+        "High watermark: pause ingestion when this many records are buffered between commits");
+    configDef.define(
+        BACKPRESSURE_RESUME_RECORDS_PROP,
+        ConfigDef.Type.LONG,
+        BACKPRESSURE_RESUME_RECORDS_DEFAULT,
+        Importance.MEDIUM,
+        "Low watermark: resume ingestion after flush when buffered records drop below this");
     return configDef;
   }
 
@@ -281,6 +306,12 @@ public class IcebergSinkConfig extends AbstractConfig {
           tablesRouteField() != null, "Must specify a route field if using dynamic table names");
     } else {
       throw new ConfigException("Must specify table name(s)");
+    }
+
+    if (backpressureEnabled()) {
+      checkState(
+          backpressureResumeBufferedRecords() < backpressureMaxBufferedRecords(),
+          "Backpressure resume threshold must be less than max threshold");
     }
   }
 
@@ -446,6 +477,18 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public boolean schemaCaseInsensitive() {
     return getBoolean(TABLES_SCHEMA_CASE_INSENSITIVE_PROP);
+  }
+
+  public boolean backpressureEnabled() {
+    return getBoolean(BACKPRESSURE_ENABLED_PROP);
+  }
+
+  public long backpressureMaxBufferedRecords() {
+    return getLong(BACKPRESSURE_MAX_RECORDS_PROP);
+  }
+
+  public long backpressureResumeBufferedRecords() {
+    return getLong(BACKPRESSURE_RESUME_RECORDS_PROP);
   }
 
   public JsonConverter jsonConverter() {
