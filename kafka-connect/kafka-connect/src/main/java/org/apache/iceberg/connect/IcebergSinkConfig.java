@@ -91,8 +91,7 @@ public class IcebergSinkConfig extends AbstractConfig {
    * @deprecated since 1.10.1, will be removed in 2.0.0; the connector now derives the consumer
    *     group ID automatically from consumer.override.group.id or the connector name.
    */
-  @Deprecated
-  private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
+  @Deprecated private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
 
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
