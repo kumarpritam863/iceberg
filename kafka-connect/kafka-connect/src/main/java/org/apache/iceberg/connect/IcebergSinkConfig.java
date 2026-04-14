@@ -229,6 +229,7 @@ public class IcebergSinkConfig extends AbstractConfig {
         CONTROL_POLL_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
         CONTROL_POLL_INTERVAL_MS_DEFAULT,
+        ConfigDef.Range.atLeast(10),
         Importance.LOW,
         "Worker control topic polling interval in milliseconds for async background processing");
     configDef.define(

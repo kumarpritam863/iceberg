@@ -186,7 +186,17 @@ public class CommitterImpl implements Committer {
               config.connectorName(), config.taskId()));
     }
     if (worker != null) {
-      worker.process();
+      try {
+        worker.process();
+      } catch (ConnectException e) {
+        LOG.error(
+            "Worker {}-{} failed during control event processing, stopping worker",
+            config.connectorName(),
+            config.taskId(),
+            e);
+        stopWorker();
+        throw e;
+      }
     }
   }
 

@@ -101,6 +101,7 @@ public class ChannelTestBase {
     when(config.controlTopic()).thenReturn(CTL_TOPIC_NAME);
     when(config.commitThreads()).thenReturn(1);
     when(config.connectGroupId()).thenReturn(CONNECT_CONSUMER_GROUP_ID);
+    when(config.controlPollIntervalMs()).thenReturn(100);
     when(config.tableConfig(any())).thenReturn(mock(TableSinkConfig.class));
 
     TopicPartitionInfo partitionInfo = mock(TopicPartitionInfo.class);

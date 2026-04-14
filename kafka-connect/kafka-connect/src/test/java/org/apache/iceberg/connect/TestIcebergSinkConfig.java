@@ -142,8 +142,9 @@ public class TestIcebergSinkConfig {
             "topics", "source-topic",
             "iceberg.tables", "db.landing",
             "iceberg.control.poll.interval-ms", "0");
-    IcebergSinkConfig config = new IcebergSinkConfig(props);
-    assertThat(config.controlPollIntervalMs()).isEqualTo(0);
+    assertThatThrownBy(() -> new IcebergSinkConfig(props))
+        .isInstanceOf(ConfigException.class)
+        .hasMessageContaining("Value must be at least 10");
   }
 
   @Test

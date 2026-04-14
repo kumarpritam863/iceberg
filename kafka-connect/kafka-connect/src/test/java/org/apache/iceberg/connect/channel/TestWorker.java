@@ -34,13 +34,11 @@ import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.connect.data.SinkWriterResult;
 import org.apache.iceberg.connect.events.AvroUtil;
 import org.apache.iceberg.connect.events.CommitComplete;
-import org.apache.iceberg.connect.events.CommitToTable;
 import org.apache.iceberg.connect.events.DataComplete;
 import org.apache.iceberg.connect.events.DataWritten;
 import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
-import org.apache.iceberg.connect.events.TableReference;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
@@ -48,6 +46,7 @@ import org.apache.iceberg.types.Types.StructType;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.awaitility.Awaitility;
@@ -85,7 +84,6 @@ public class TestWorker extends ChannelTestBase {
       SinkWriter sinkWriter = mock(SinkWriter.class);
       when(sinkWriter.completeWrite()).thenReturn(sinkWriterResult);
 
-      // init consumer after subscribe()
       initConsumer();
 
       Worker worker = new Worker(config, clientFactory, sinkWriter, context);
@@ -101,11 +99,10 @@ public class TestWorker extends ChannelTestBase {
       byte[] bytes = AvroUtil.encode(commitRequest);
       consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", bytes));
 
-      // Give background thread time to poll and buffer the event
       Awaitility.await()
-          .pollDelay(Duration.ofMillis(500))
-          .atMost(Duration.ofMillis(600))
-          .until(() -> true);
+          .atMost(Duration.ofSeconds(5))
+          .pollInterval(Duration.ofMillis(10))
+          .until(() -> worker.pendingEventCount() > 0);
 
       worker.process();
 
@@ -162,11 +159,10 @@ public class TestWorker extends ChannelTestBase {
       consumer.addRecord(
           new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", AvroUtil.encode(event2)));
 
-      // Wait for background polling to buffer events
       Awaitility.await()
-          .pollDelay(Duration.ofMillis(300))
-          .atMost(Duration.ofMillis(400))
-          .until(() -> true);
+          .atMost(Duration.ofSeconds(5))
+          .pollInterval(Duration.ofMillis(10))
+          .until(() -> worker.pendingEventCount() >= 2);
 
       // Process should handle both buffered events
       worker.process();
@@ -198,21 +194,28 @@ public class TestWorker extends ChannelTestBase {
       Worker worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
 
-      // Add events with different group IDs (should be ignored)
+      // Add events with different group IDs (should be ignored by Channel's group filter)
       UUID commitId = UUID.randomUUID();
       Event event = new Event("different-group-id", new StartCommit(commitId));
       consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", AvroUtil.encode(event)));
 
-      // Give background thread time to poll
+      // Also add a non-START_COMMIT event with correct group (should be ignored by Worker)
+      Event commitComplete =
+          new Event(config.connectGroupId(), new CommitComplete(commitId, EventTestUtil.now()));
+      consumer.addRecord(
+          new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", AvroUtil.encode(commitComplete)));
+
+      // Wait a bit for the background thread to process the records
       Awaitility.await()
           .pollDelay(Duration.ofMillis(200))
-          .atMost(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(5))
           .until(() -> true);
 
       worker.process();
 
-      // Should not produce any events since the group ID doesn't match
+      // Should not produce any events since no matching START_COMMIT was received
       assertThat(producer.history()).isEmpty();
+      assertThat(worker.pendingEventCount()).isEqualTo(0);
 
       worker.stop();
     }
@@ -238,75 +241,10 @@ public class TestWorker extends ChannelTestBase {
       Worker worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
 
-      // Stop worker immediately
+      // Stop worker immediately — should complete without exceptions
       worker.stop();
 
-      // Should complete without exceptions
       assertThat(producer.history()).isEmpty();
-    }
-  }
-
-  @Test
-  public void testWorkerProcessesMultipleEventTypes() {
-    when(config.catalogName()).thenReturn("catalog");
-
-    try (MockedStatic<KafkaUtils> mockKafkaUtils = mockStatic(KafkaUtils.class)) {
-      ConsumerGroupMetadata consumerGroupMetadata = mock(ConsumerGroupMetadata.class);
-      mockKafkaUtils
-          .when(() -> KafkaUtils.consumerGroupMetadata(any()))
-          .thenReturn(consumerGroupMetadata);
-
-      SinkTaskContext context = mock(SinkTaskContext.class);
-      TopicPartition topicPartition = new TopicPartition(SRC_TOPIC_NAME, 0);
-      when(context.assignment()).thenReturn(ImmutableSet.of(topicPartition));
-
-      SinkWriter sinkWriter = mock(SinkWriter.class);
-      when(sinkWriter.completeWrite())
-          .thenReturn(new SinkWriterResult(ImmutableList.of(), ImmutableMap.of()));
-
-      initConsumer();
-
-      Worker worker = new Worker(config, clientFactory, sinkWriter, context);
-      worker.start();
-
-      UUID commitId = UUID.randomUUID();
-
-      // Add START_COMMIT event
-      Event startCommit = new Event(config.connectGroupId(), new StartCommit(commitId));
-      consumer.addRecord(
-          new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", AvroUtil.encode(startCommit)));
-
-      // Add COMMIT_COMPLETE event
-      Event commitComplete =
-          new Event(config.connectGroupId(), new CommitComplete(commitId, EventTestUtil.now()));
-      consumer.addRecord(
-          new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", AvroUtil.encode(commitComplete)));
-
-      // Add COMMIT_TO_TABLE event
-      Event commitToTable =
-          new Event(
-              config.connectGroupId(),
-              new CommitToTable(
-                  commitId,
-                  TableReference.of("catalog", TableIdentifier.parse(TABLE_NAME)),
-                  1L,
-                  EventTestUtil.now()));
-      consumer.addRecord(
-          new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 3, "key", AvroUtil.encode(commitToTable)));
-
-      // Wait for background thread to buffer all events
-      Awaitility.await()
-          .pollDelay(Duration.ofMillis(300))
-          .atMost(Duration.ofMillis(400))
-          .until(() -> true);
-
-      // All events should be buffered
-      worker.process();
-
-      // Should have processed the START_COMMIT event
-      assertThat(producer.history()).isNotEmpty();
-
-      worker.stop();
     }
   }
 
@@ -336,48 +274,6 @@ public class TestWorker extends ChannelTestBase {
       worker.process();
 
       assertThat(producer.history()).isEmpty();
-
-      worker.stop();
-    }
-  }
-
-  @Test
-  public void testWorkerWithCustomPollInterval() {
-    when(config.catalogName()).thenReturn("catalog");
-    when(config.controlPollIntervalMs()).thenReturn(1000); // 1 second
-
-    try (MockedStatic<KafkaUtils> mockKafkaUtils = mockStatic(KafkaUtils.class)) {
-      ConsumerGroupMetadata consumerGroupMetadata = mock(ConsumerGroupMetadata.class);
-      mockKafkaUtils
-          .when(() -> KafkaUtils.consumerGroupMetadata(any()))
-          .thenReturn(consumerGroupMetadata);
-
-      SinkTaskContext context = mock(SinkTaskContext.class);
-      TopicPartition topicPartition = new TopicPartition(SRC_TOPIC_NAME, 0);
-      when(context.assignment()).thenReturn(ImmutableSet.of(topicPartition));
-
-      SinkWriter sinkWriter = mock(SinkWriter.class);
-      when(sinkWriter.completeWrite())
-          .thenReturn(new SinkWriterResult(ImmutableList.of(), ImmutableMap.of()));
-
-      initConsumer();
-
-      Worker worker = new Worker(config, clientFactory, sinkWriter, context);
-      worker.start();
-
-      UUID commitId = UUID.randomUUID();
-      Event event = new Event(config.connectGroupId(), new StartCommit(commitId));
-      consumer.addRecord(new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", AvroUtil.encode(event)));
-
-      // Wait for longer than poll interval to ensure event is buffered
-      Awaitility.await()
-          .pollDelay(Duration.ofMillis(1500))
-          .atMost(Duration.ofMillis(1600))
-          .until(() -> true);
-
-      worker.process();
-
-      assertThat(producer.history()).isNotEmpty();
 
       worker.stop();
     }
@@ -435,19 +331,58 @@ public class TestWorker extends ChannelTestBase {
       consumer.addRecord(
           new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 2, "key", AvroUtil.encode(event2)));
 
-      // Wait for background thread to buffer both commits
       Awaitility.await()
-          .pollDelay(Duration.ofMillis(300))
-          .atMost(Duration.ofMillis(400))
-          .until(() -> true);
+          .atMost(Duration.ofSeconds(5))
+          .pollInterval(Duration.ofMillis(10))
+          .until(() -> worker.pendingEventCount() >= 2);
 
       // Process both commits
       worker.process();
 
       // Should have events for both commits (2 data written + 2 data complete)
-      assertThat(producer.history().size()).isGreaterThanOrEqualTo(4);
+      assertThat(producer.history()).hasSize(4);
 
       worker.stop();
+    }
+  }
+
+  @Test
+  public void testBackgroundPollingErrorPropagation() {
+    when(config.catalogName()).thenReturn("catalog");
+
+    try (MockedStatic<KafkaUtils> mockKafkaUtils = mockStatic(KafkaUtils.class)) {
+      ConsumerGroupMetadata consumerGroupMetadata = mock(ConsumerGroupMetadata.class);
+      mockKafkaUtils
+          .when(() -> KafkaUtils.consumerGroupMetadata(any()))
+          .thenReturn(consumerGroupMetadata);
+
+      SinkTaskContext context = mock(SinkTaskContext.class);
+      when(context.assignment()).thenReturn(ImmutableSet.of());
+
+      SinkWriter sinkWriter = mock(SinkWriter.class);
+
+      initConsumer();
+
+      Worker worker = new Worker(config, clientFactory, sinkWriter, context);
+      worker.start();
+
+      // Add a record with invalid payload to cause deserialization error in backgroundPoll
+      consumer.addRecord(
+          new ConsumerRecord<>(CTL_TOPIC_NAME, 0, 1, "key", new byte[] {0x00, 0x01}));
+
+      // Wait for the background thread to encounter the error
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .pollInterval(Duration.ofMillis(10))
+          .until(
+              () -> {
+                try {
+                  worker.process();
+                  return false;
+                } catch (ConnectException e) {
+                  return true;
+                }
+              });
     }
   }
 }

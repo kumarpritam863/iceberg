@@ -39,6 +39,8 @@ import org.apache.iceberg.connect.events.Event;
 import org.apache.iceberg.connect.events.PayloadType;
 import org.apache.iceberg.connect.events.StartCommit;
 import org.apache.iceberg.connect.events.TopicPartitionOffset;
+import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
+import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -52,6 +54,9 @@ class Worker extends Channel {
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
 
+  // Queue is unbounded because the coordinator sends at most one START_COMMIT per commit interval.
+  // Under normal operation, the main thread drains the queue on every put() call, so the queue
+  // depth is effectively bounded by the commit rate.
   private final ConcurrentLinkedQueue<Envelope> controlEventQueue;
   private final ExecutorService pollingExecutor;
   private final AtomicBoolean running;
@@ -77,7 +82,6 @@ class Worker extends Channel {
     this.sinkWriter = sinkWriter;
 
     this.workerIdentifier = config.connectorName() + "-" + config.taskId();
-    // Initialize async processing components
     this.controlEventQueue = new ConcurrentLinkedQueue<>();
     this.running = new AtomicBoolean(false);
     this.pollInterval = Duration.ofMillis(config.controlPollIntervalMs());
@@ -87,18 +91,19 @@ class Worker extends Channel {
               Thread thread =
                   new Thread(
                       r, "worker-control-poller-" + config.connectorName() + "-" + config.taskId());
-              thread.setDaemon(true); // Daemon thread for automatic cleanup
+              thread.setDaemon(true);
               return thread;
             });
   }
 
   @Override
   void start() {
-    super.start();
+    // Do NOT call super.start() — all consumer access must happen on the background thread
+    // to satisfy KafkaConsumer's single-thread requirement. The background thread calls
+    // initializeConsumer() as its first action.
     running.set(true);
 
     try {
-      // Start background polling thread
       pollingExecutor.execute(this::backgroundPoll);
     } catch (Exception ex) {
       LOG.error("Worker {} failed to execute the task.", workerIdentifier, ex);
@@ -112,55 +117,50 @@ class Worker extends Channel {
   }
 
   /**
-   * Background polling task that continuously polls the control topic and buffers relevant events
-   * for processing.
+   * Background polling task that subscribes to the control topic and continuously polls for events,
+   * buffering them for processing by the main thread. All KafkaConsumer access is confined to this
+   * thread.
    */
   private void backgroundPoll() {
     LOG.info("Background control topic polling thread started on {}", workerIdentifier);
     try {
+      // Initialize consumer on this thread — KafkaConsumer is NOT thread-safe,
+      // so subscribe + all poll calls must happen on the same thread.
+      initializeConsumer();
+
       while (running.get() && !Thread.currentThread().isInterrupted()) {
         try {
-          // Poll control topic with configured interval
           consumeAvailable(pollInterval);
-        } catch (Exception e) {
-          if (running.compareAndSet(true, false)) {
-            LOG.error("Worker {} failed while polling control events", workerIdentifier, e);
-            errorRef.compareAndSet(null, e);
-          }
+        } catch (WakeupException e) {
+          // Expected during shutdown — wakeupConsumer() was called
+          LOG.debug("Consumer wakeup received during shutdown for {}", workerIdentifier, e);
           break;
         }
       }
+    } catch (Exception e) {
+      if (running.compareAndSet(true, false)) {
+        LOG.error("Worker {} failed while polling control events", workerIdentifier, e);
+        errorRef.compareAndSet(null, e);
+      }
     } finally {
-      LOG.info("Background control topic polling thread stopped");
+      LOG.info("Background control topic polling thread stopped on {}", workerIdentifier);
     }
   }
 
   /**
    * Process all available events from the queue (non-blocking). This is called from the main put()
-   * path.
+   * path. Throws ConnectException if the background thread encountered an error — the caller is
+   * responsible for stopping the worker.
    */
   void process() {
     Exception ex = errorRef.getAndSet(null);
     if (ex != null) {
-      stop();
       throw new ConnectException(
           String.format("Worker %s failed while processing async polling.", workerIdentifier), ex);
     }
     Envelope envelope;
-    // Drain all available events from queue
     while ((envelope = controlEventQueue.poll()) != null) {
-      processEnvelope(envelope);
-    }
-  }
-
-  /** Process a single envelope (actual event handling logic). */
-  private void processEnvelope(Envelope envelope) {
-    Event event = envelope.event();
-    if (PayloadType.START_COMMIT == event.type()) {
-      handleStartCommit(((StartCommit) event.payload()).commitId());
-    } else {
-      LOG.warn(
-          "Worker {} not responsible to process event of type {}.", workerIdentifier, event.type());
+      handleStartCommit(((StartCommit) envelope.event().payload()).commitId());
     }
   }
 
@@ -205,18 +205,11 @@ class Worker extends Channel {
 
   @Override
   protected boolean receive(Envelope envelope) {
-    Event event = envelope.event();
-    PayloadType type = event.payload().type();
-
-    // Only buffer control events that need processing
-    if (type == PayloadType.START_COMMIT
-        || type == PayloadType.COMMIT_COMPLETE
-        || type == PayloadType.COMMIT_TO_TABLE) {
+    if (envelope.event().payload().type() == PayloadType.START_COMMIT) {
       controlEventQueue.offer(envelope);
-      LOG.info("Worker {} buffered control event: {}", workerIdentifier, type);
+      LOG.debug("Worker {} buffered START_COMMIT event", workerIdentifier);
       return true;
     }
-
     return false;
   }
 
@@ -231,6 +224,7 @@ class Worker extends Channel {
 
   private void terminateBackGroundPolling() {
     running.set(false);
+    wakeupConsumer();
     pollingExecutor.shutdownNow();
     try {
       if (!pollingExecutor.awaitTermination(1, TimeUnit.MINUTES)) {
@@ -259,5 +253,10 @@ class Worker extends Channel {
 
   void save(Collection<SinkRecord> sinkRecords) {
     sinkWriter.save(sinkRecords);
+  }
+
+  @VisibleForTesting
+  int pendingEventCount() {
+    return controlEventQueue.size();
   }
 }
