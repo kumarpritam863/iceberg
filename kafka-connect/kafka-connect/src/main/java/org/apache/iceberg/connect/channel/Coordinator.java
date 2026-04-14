@@ -153,7 +153,7 @@ class Coordinator extends Channel {
     } catch (Exception e) {
       LOG.warn(
           "Coordinator {} failed to commit for commit {}, will try again next cycle",
-              taskId,
+          taskId,
           commitState.currentCommitId(),
           e);
     } finally {
@@ -169,8 +169,9 @@ class Coordinator extends Channel {
         .executeWith(exec)
         .stopOnFailure()
         .run(
-            entry -> commitToTable(
-                entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs));
+            entry ->
+                commitToTable(
+                    entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -184,7 +185,7 @@ class Coordinator extends Channel {
 
     LOG.info(
         "Coordinator {} completed commit {}, committed to {} table(s), valid-through {}",
-            taskId,
+        taskId,
         commitState.currentCommitId(),
         commitMap.size(),
         validThroughTs);
@@ -266,7 +267,8 @@ class Coordinator extends Channel {
     }
 
     if (dataFiles.isEmpty() && deleteFiles.isEmpty()) {
-      LOG.info("Coordinator {} found nothing to commit to table {}, skipping", taskId, tableIdentifier);
+      LOG.info(
+          "Coordinator {} found nothing to commit to table {}, skipping", taskId, tableIdentifier);
     } else {
       if (deleteFiles.isEmpty()) {
         AppendFiles appendOp =
@@ -378,8 +380,7 @@ class Coordinator extends Channel {
       return Map.of();
     }
 
-    TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {
-    };
+    TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {};
     try {
       return MAPPER.readValue(value, typeRef);
     } catch (IOException e) {

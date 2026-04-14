@@ -99,7 +99,7 @@ public class CommitterImpl implements Committer {
     if (firstTopicPartition == null) {
       LOG.warn(
           "Committer {} found no partitions assigned across all members, cannot determine leader",
-              taskId);
+          taskId);
       return false;
     }
 
@@ -107,12 +107,12 @@ public class CommitterImpl implements Committer {
     if (containsFirst) {
       LOG.info(
           "Committer {} contains the first partition {}, this task is the leader",
-              taskId,
+          taskId,
           firstTopicPartition);
     } else {
       LOG.debug(
           "Committer {} does not contain the first partition {}, not the leader",
-              taskId,
+          taskId,
           firstTopicPartition);
     }
 
@@ -164,8 +164,7 @@ public class CommitterImpl implements Committer {
 
     // Defensive: close called without prior initialization (should not happen).
     if (!isInitialized.get()) {
-      LOG.warn(
-          "Close unexpectedly called on committer {} without partition assignment", taskId);
+      LOG.warn("Close unexpectedly called on committer {} without partition assignment", taskId);
       return;
     }
 
