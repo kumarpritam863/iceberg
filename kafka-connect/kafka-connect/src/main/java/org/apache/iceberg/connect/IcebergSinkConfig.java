@@ -86,6 +86,14 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
   private static final int COMMIT_TIMEOUT_MS_DEFAULT = 30_000;
   private static final String COMMIT_THREADS_PROP = "iceberg.control.commit.threads";
+
+  /**
+   * @deprecated since 1.10.1, will be removed in 2.0.0; the connector now derives the consumer
+   *     group ID automatically from consumer.override.group.id or the connector name.
+   */
+  @Deprecated
+  private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
+
   private static final String TRANSACTIONAL_PREFIX_PROP =
       "iceberg.coordinator.transactional.prefix";
   private static final String HADOOP_CONF_DIR_PROP = "iceberg.hadoop-conf-dir";
@@ -192,6 +200,13 @@ public class IcebergSinkConfig extends AbstractConfig {
         DEFAULT_CONTROL_GROUP_PREFIX,
         Importance.LOW,
         "Prefix of the control consumer group");
+    configDef.define(
+        CONNECT_GROUP_ID_PROP,
+        ConfigDef.Type.STRING,
+        null,
+        Importance.LOW,
+        "Deprecated: Name of the Connect consumer group, should not be set under normal conditions."
+            + " Use consumer.override.group.id instead.");
     configDef.define(
         COMMIT_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
@@ -390,6 +405,16 @@ public class IcebergSinkConfig extends AbstractConfig {
   }
 
   public String sourceConsumerGroupId() {
+    // Check deprecated property first for backwards compatibility
+    String deprecatedResult = getString(CONNECT_GROUP_ID_PROP);
+    if (deprecatedResult != null) {
+      LOG.warn(
+          "Property '{}' is deprecated and will be removed in 2.0.0. "
+              + "Use 'consumer.override.group.id' instead.",
+          CONNECT_GROUP_ID_PROP);
+      return deprecatedResult;
+    }
+
     String result = originalProps.get("consumer.override.group.id");
     if (result != null) {
       return result;
