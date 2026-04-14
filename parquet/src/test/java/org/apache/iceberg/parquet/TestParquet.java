@@ -28,7 +28,9 @@ import static org.apache.iceberg.parquet.ParquetWritingTestUtils.createTempFile;
 import static org.apache.iceberg.parquet.ParquetWritingTestUtils.write;
 import static org.apache.iceberg.relocated.com.google.common.collect.Iterables.getOnlyElement;
 import static org.apache.iceberg.types.Types.NestedField.optional;
+import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
 import java.io.IOException;
@@ -37,6 +39,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
@@ -46,6 +49,8 @@ import org.apache.iceberg.MetricsConfig;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.avro.AvroSchemaUtil;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.mapping.MappingUtil;
+import org.apache.iceberg.mapping.NameMapping;
 import org.apache.iceberg.relocated.com.google.common.base.Strings;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
@@ -53,6 +58,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.types.Types;
 import org.apache.iceberg.types.Types.IntegerType;
 import org.apache.iceberg.util.Pair;
+import org.apache.iceberg.variants.Variant;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.column.statistics.Statistics;
 import org.apache.parquet.hadoop.ParquetFileReader;
@@ -60,7 +66,9 @@ import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.BlockMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.io.LocalOutputFile;
+import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -263,6 +271,71 @@ public class TestParquet {
         }
       }
     }
+  }
+
+  @Test
+  public void testFooterMetricsWithNameMappingForFileWithoutIds() throws IOException {
+    Schema schemaWithIds =
+        new Schema(
+            required(1, "id", Types.LongType.get()), optional(2, "data", Types.StringType.get()));
+
+    NameMapping nameMapping = MappingUtil.create(schemaWithIds);
+
+    File file = createTempFile(temp);
+
+    // Write a Parquet file WITHOUT field IDs using plain Avro schema
+    org.apache.avro.Schema avroSchemaWithoutIds =
+        org.apache.avro.SchemaBuilder.record("test")
+            .fields()
+            .requiredLong("id")
+            .optionalString("data")
+            .endRecord();
+
+    try (ParquetWriter<GenericData.Record> writer =
+        AvroParquetWriter.<GenericData.Record>builder(ParquetIO.file(Files.localOutput(file)))
+            .withDataModel(GenericData.get())
+            .withSchema(avroSchemaWithoutIds)
+            .build()) {
+
+      GenericData.Record record = new GenericData.Record(avroSchemaWithoutIds);
+      record.put("id", 1L);
+      record.put("data", "a");
+      writer.write(record);
+    }
+
+    InputFile inputFile = Files.localInput(file);
+
+    try (ParquetFileReader reader = ParquetFileReader.open(ParquetIO.file(inputFile))) {
+      MessageType parquetSchema = reader.getFooter().getFileMetaData().getSchema();
+      assertThat(ParquetSchemaUtil.hasIds(parquetSchema)).isFalse();
+
+      Metrics metrics =
+          ParquetUtil.footerMetrics(
+              reader.getFooter(), Stream.empty(), MetricsConfig.getDefault(), nameMapping);
+
+      // The key assertion: column sizes should be keyed by field IDs from NameMapping
+      assertThat(metrics.columnSizes()).containsOnlyKeys(1, 2);
+    }
+  }
+
+  @Test
+  public void testAvroWriterRejectsVariantType() {
+    MessageType schema =
+        org.apache.parquet.schema.Types.buildMessage()
+            .optional(PrimitiveTypeName.INT32)
+            .named("id")
+            .optionalGroup()
+            .as(LogicalTypeAnnotation.variantType(Variant.VARIANT_SPEC_VERSION))
+            .required(PrimitiveTypeName.BINARY)
+            .named("metadata")
+            .required(PrimitiveTypeName.BINARY)
+            .named("value")
+            .named("v")
+            .named("table");
+
+    assertThatThrownBy(() -> ParquetAvroWriter.buildWriter(schema))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessage("Avro writer does not support variant types");
   }
 
   private Pair<File, Long> generateFile(

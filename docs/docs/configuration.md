@@ -90,6 +90,15 @@ Iceberg tables support table properties to configure table behavior, like the de
 | write.merge.isolation-level                         | serializable                | Isolation level for merge commands: serializable or snapshot                                                                                                                                                                                       |
 | write.delete.granularity                            | partition                   | Controls the granularity of generated delete files: partition or file                                                                                                                                                                              |
 
+### Encryption properties
+
+| Property                          | Default            | Description                                                                           |
+| --------------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| encryption.key-id                 | (not set)          | ID of the master key of the table                                                     |
+| encryption.data-key-length        | 16 (bytes)         | Length of keys used for encryption of table files. Valid values are 16, 24, 32 bytes  |
+
+See the [Encryption](encryption.md) document for additional details.
+
 ### Table behavior properties
 
 | Property                           | Default          | Description                                                   |
@@ -108,6 +117,7 @@ Iceberg tables support table properties to configure table behavior, like the de
 | history.expire.max-snapshot-age-ms | 432000000 (5 days) | Default max age of snapshots to keep on the table and all of its branches while expiring snapshots |
 | history.expire.min-snapshots-to-keep | 1                | Default min number of snapshots to keep on the table and all of its branches while expiring snapshots |
 | history.expire.max-ref-age-ms      | `Long.MAX_VALUE` (forever) | For snapshot references except the `main` branch, default max age of snapshot references to keep while expiring snapshots. The `main` branch never expires. |
+| gc.enabled                         | true             | Allows garbage collection operations such as expiring snapshots and removing orphan files |
 
 ### Reserved table properties
 Reserved table properties are only used to control behaviors when creating or updating a table.
@@ -116,6 +126,14 @@ The value of these properties are not persisted as a part of the table metadata.
 | Property       | Default  | Description                                                                                                                          |
 | -------------- | -------- |--------------------------------------------------------------------------------------------------------------------------------------|
 | format-version | 2        | Table's format version as defined in the [Spec](../../spec.md#format-versioning). Defaults to 2 since version 1.4.0. |
+
+### Informational properties
+
+Informational properties can be set to provide additional context about a table. They can be useful for documentation, discovery, and integration with external tools. They do not affect read/write behavior or query semantics.
+
+| Property | Default    | Description                                                                                                         |
+| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| comment  | (not set)  | A table-level description that documents the business meaning and usage context. |
 
 ### Compatibility flags
 
@@ -137,6 +155,7 @@ Iceberg catalogs support using catalog properties to configure catalog behaviors
 | cache-enabled                     | true               | Whether to cache catalog entries |
 | cache.expiration-interval-ms      | 30000              | How long catalog entries are locally cached, in milliseconds; 0 disables caching, negative values disable expiration |
 | metrics-reporter-impl | org.apache.iceberg.metrics.LoggingMetricsReporter | Custom `MetricsReporter` implementation to use in a catalog. See the [Metrics reporting](metrics-reporting.md) section for additional details |
+| encryption.kms-impl               | null               | a custom `KeyManagementClient` implementation to use in a catalog for interactions with KMS (key management service). See the [Encryption](encryption.md) document for additional details |
 
 `HadoopCatalog` and `HiveCatalog` can access the properties in their constructors.
 Any other custom catalog can access the properties by implementing `Catalog.initialize(catalogName, catalogProperties)`.
@@ -179,6 +198,7 @@ Required and optional properties to include while using `google` authentication
 | Property                   | Default                                          | Description                                      |
 |----------------------------|--------------------------------------------------|--------------------------------------------------|
 | `gcp.auth.credentials-path`| Application Default Credentials (ADC)            | Path to a service account JSON key file.         |
+| `gcp.auth.credentials-json` | Application Default Credentials (ADC)            | JSON string of a service account credential.     |
 | `gcp.auth.scopes`          | `https://www.googleapis.com/auth/cloud-platform` | Comma-separated list of OAuth scopes to request. |
 
 ### Lock catalog properties
@@ -195,6 +215,15 @@ Here are the catalog properties related to locking. They are used by some catalo
 | lock.heartbeat-timeout-ms         | 15000 (15 s)       | the maximum time without a heartbeat to consider a lock expired  |
 
 ## Hadoop configuration
+
+### HadoopTables Lock Configuration
+
+When using `HadoopTables` (tables without a catalog), lock properties from the [Lock catalog properties](#lock-catalog-properties) section can be configured by prefixing them with `iceberg.tables.hadoop.`. This ensures atomic commits on file systems like S3 that lack native write mutual exclusion.
+
+!!! info
+    To use DynamoDB as a lock manager with `HadoopTables`, set `iceberg.tables.hadoop.lock-impl` to `org.apache.iceberg.aws.dynamodb.DynamoDbLockManager` and `iceberg.tables.hadoop.lock.table` to your DynamoDB table name. See [DynamoDB Lock Manager](aws.md#dynamodb-lock-manager) for more details.
+
+### Hive Metastore Configuration
 
 The following properties from the Hadoop configuration are used by the Hive Metastore connector.
 The HMS table locking is a 2-step process:
