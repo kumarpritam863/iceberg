@@ -91,12 +91,7 @@ public class HiveTableOperations extends BaseMetastoreTableOperations
   private String tableKeyId;
   private int encryptionDekLength;
 
-  // keys loaded from the latest metadata
-  private Optional<List<EncryptedKey>> encryptedKeysFromMetadata = Optional.empty();
-
-  // keys added to EM (e.g. as a result of a FileAppend) but not committed into the latest metadata
-  // yet
-  private Optional<List<EncryptedKey>> encryptedKeysPending = Optional.empty();
+  private List<EncryptedKey> encryptedKeys = List.of();
 
   protected HiveTableOperations(
       Configuration conf,
@@ -149,7 +144,7 @@ public class HiveTableOperations extends BaseMetastoreTableOperations
     if (tableKeyId != null) {
       if (keyManagementClient == null) {
         throw new RuntimeException(
-            "Cant create encryption manager, because key management client is not set");
+            "Can't create encryption manager, because key management client is not set");
       }
 
       Map<String, String> encryptionProperties = Maps.newHashMap();
@@ -157,12 +152,9 @@ public class HiveTableOperations extends BaseMetastoreTableOperations
       encryptionProperties.put(
           TableProperties.ENCRYPTION_DEK_LENGTH, String.valueOf(encryptionDekLength));
 
-      List<EncryptedKey> keys = Lists.newLinkedList();
-      encryptedKeysFromMetadata.ifPresent(keys::addAll);
-      encryptedKeysPending.ifPresent(keys::addAll);
-
       encryptionManager =
-          EncryptionUtil.createEncryptionManager(keys, encryptionProperties, keyManagementClient);
+          EncryptionUtil.createEncryptionManager(
+              encryptedKeys, encryptionProperties, keyManagementClient);
     } else {
       return PlaintextEncryptionManager.instance();
     }
@@ -218,24 +210,20 @@ public class HiveTableOperations extends BaseMetastoreTableOperations
               ? Integer.parseInt(dekLengthFromHMS)
               : TableProperties.ENCRYPTION_DEK_LENGTH_DEFAULT;
 
-      encryptedKeysFromMetadata = Optional.ofNullable(current().encryptionKeys());
+      encryptedKeys =
+          Optional.ofNullable(current().encryptionKeys())
+              .map(Lists::newLinkedList)
+              .orElseGet(Lists::newLinkedList);
 
       if (encryptionManager != null) {
-        encryptedKeysPending = Optional.of(Lists.newLinkedList());
-
         Set<String> keyIdsFromMetadata =
-            encryptedKeysFromMetadata.orElseGet(Lists::newLinkedList).stream()
-                .map(EncryptedKey::keyId)
-                .collect(Collectors.toSet());
+            encryptedKeys.stream().map(EncryptedKey::keyId).collect(Collectors.toSet());
 
         for (EncryptedKey keyFromEM : EncryptionUtil.encryptionKeys(encryptionManager).values()) {
           if (!keyIdsFromMetadata.contains(keyFromEM.keyId())) {
-            encryptedKeysPending.get().add(keyFromEM);
+            encryptedKeys.add(keyFromEM);
           }
         }
-
-      } else {
-        encryptedKeysPending = Optional.empty();
       }
 
       // Force re-creation of encryption manager with updated keys
