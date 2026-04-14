@@ -47,7 +47,7 @@ public class CommitterImpl implements Committer {
   private KafkaClientFactory clientFactory;
   private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
   private final AtomicBoolean isInitialized = new AtomicBoolean(false);
-  private String identifier;
+  private String taskId;
 
   private void initialize(
       Catalog icebergCatalog,
@@ -58,7 +58,7 @@ public class CommitterImpl implements Committer {
       this.config = icebergSinkConfig;
       this.context = sinkTaskContext;
       this.clientFactory = new KafkaClientFactory(config.kafkaProps());
-      this.identifier = config.connectorName() + "-" + config.taskId();
+      this.taskId = config.connectorName() + "-" + config.taskId();
     }
   }
 
@@ -99,7 +99,7 @@ public class CommitterImpl implements Committer {
     if (firstTopicPartition == null) {
       LOG.warn(
           "Committer {} found no partitions assigned across all members, cannot determine leader",
-          identifier);
+              taskId);
       return false;
     }
 
@@ -107,12 +107,12 @@ public class CommitterImpl implements Committer {
     if (containsFirst) {
       LOG.info(
           "Committer {} contains the first partition {}, this task is the leader",
-          identifier,
+              taskId,
           firstTopicPartition);
     } else {
       LOG.debug(
           "Committer {} does not contain the first partition {}, not the leader",
-          identifier,
+              taskId,
           firstTopicPartition);
     }
 
@@ -145,7 +145,7 @@ public class CommitterImpl implements Committer {
       Collection<TopicPartition> addedPartitions) {
     initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
     if (hasLeaderPartition(addedPartitions)) {
-      LOG.info("Committer {} received leader partition. Starting Coordinator.", identifier);
+      LOG.info("Committer {} received leader partition. Starting Coordinator.", taskId);
       startCoordinator();
     }
   }
@@ -165,25 +165,25 @@ public class CommitterImpl implements Committer {
     // Defensive: close called without prior initialization (should not happen).
     if (!isInitialized.get()) {
       LOG.warn(
-          "Close unexpectedly called on committer {} without partition assignment", identifier);
+          "Close unexpectedly called on committer {} without partition assignment", taskId);
       return;
     }
 
     // Empty partitions → task was stopped explicitly. Stop coordinator if running.
     if (closedPartitions.isEmpty()) {
-      LOG.info("Committer {} stopped. Closing coordinator.", identifier);
+      LOG.info("Committer {} stopped. Closing coordinator.", taskId);
       stopCoordinator();
       return;
     }
 
     // Normal close: if leader partition is lost, stop coordinator.
     if (hasLeaderPartition(closedPartitions)) {
-      LOG.info("Committer {} lost leader partition. Stopping coordinator.", identifier);
+      LOG.info("Committer {} lost leader partition. Stopping coordinator.", taskId);
       stopCoordinator();
     }
 
     // Reset offsets to last committed to avoid data loss.
-    LOG.info("Seeking to last committed offsets for worker {}.", identifier);
+    LOG.info("Seeking to last committed offsets for worker {}.", taskId);
     KafkaUtils.seekToLastCommittedOffsets(context);
   }
 
@@ -199,7 +199,7 @@ public class CommitterImpl implements Committer {
   private void processControlEvents() {
     if (coordinatorThread != null && coordinatorThread.isTerminated()) {
       throw new NotRunningException(
-          String.format("Coordinator unexpectedly terminated on committer %s", identifier));
+          String.format("Coordinator unexpectedly terminated on committer %s", taskId));
     }
     if (worker != null) {
       worker.process();
@@ -208,7 +208,7 @@ public class CommitterImpl implements Committer {
 
   private void startWorker() {
     if (null == this.worker) {
-      LOG.info("Starting commit worker {}", identifier);
+      LOG.info("Starting commit worker {}", taskId);
       SinkWriter sinkWriter = new SinkWriter(catalog, config);
       worker = new Worker(config, clientFactory, sinkWriter, context);
       worker.start();
@@ -217,7 +217,7 @@ public class CommitterImpl implements Committer {
 
   private void startCoordinator() {
     if (null == this.coordinatorThread) {
-      LOG.info("Task {} elected leader, starting commit coordinator", identifier);
+      LOG.info("Task {} elected leader, starting commit coordinator", taskId);
       Coordinator coordinator =
           new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
       coordinatorThread = new CoordinatorThread(coordinator);
