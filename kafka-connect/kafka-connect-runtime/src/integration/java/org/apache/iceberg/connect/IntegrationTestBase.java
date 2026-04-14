@@ -130,7 +130,7 @@ public abstract class IntegrationTestBase {
               }
             });
     assertThat(props).containsKey("kafka.connect.commit-id");
-    assertThat(props).containsKey("kafka.connect.coordinator-id");
+    assertThat(props).containsKey("kafka.connect.task-id");
   }
 
   protected List<DataFile> dataFiles(TableIdentifier tableIdentifier, String branch) {

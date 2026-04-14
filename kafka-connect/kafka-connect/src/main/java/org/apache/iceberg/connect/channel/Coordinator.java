@@ -70,7 +70,7 @@ class Coordinator extends Channel {
   private static final Logger LOG = LoggerFactory.getLogger(Coordinator.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final String COMMIT_ID_SNAPSHOT_PROP = "kafka.connect.commit-id";
-  private static final String COORDINATOR_ID_SNAPSHOT_PROP = "kafka.connect.coordinator-id";
+  private static final String TASK_ID_SNAPSHOT_PROP = "kafka.connect.task-id";
   private static final String VALID_THROUGH_TS_SNAPSHOT_PROP = "kafka.connect.valid-through-ts";
   private static final Duration POLL_DURATION = Duration.ofSeconds(1);
 
@@ -81,7 +81,7 @@ class Coordinator extends Channel {
   private final ExecutorService exec;
   private final CommitState commitState;
   private volatile boolean terminated;
-  private final String coordinatorId;
+  private final String taskId;
 
   Coordinator(
       Catalog catalog,
@@ -111,7 +111,7 @@ class Coordinator extends Channel {
                 .setNameFormat("iceberg-committer" + "-%d")
                 .build());
     this.commitState = new CommitState(config);
-    this.coordinatorId = config.connectorName() + "-" + config.taskId();
+    this.taskId = config.connectorName() + "-" + config.taskId();
   }
 
   void process() {
@@ -121,7 +121,7 @@ class Coordinator extends Channel {
       Event event =
           new Event(config.connectGroupId(), new StartCommit(commitState.currentCommitId()));
       send(event);
-      LOG.info("Coordinator {} initiated commit {}", coordinatorId, commitState.currentCommitId());
+      LOG.info("Coordinator {} initiated commit {}", taskId, commitState.currentCommitId());
     }
 
     consumeAvailable(POLL_DURATION);
@@ -153,7 +153,7 @@ class Coordinator extends Channel {
     } catch (Exception e) {
       LOG.warn(
           "Coordinator {} failed to commit for commit {}, will try again next cycle",
-          coordinatorId,
+              taskId,
           commitState.currentCommitId(),
           e);
     } finally {
@@ -169,10 +169,8 @@ class Coordinator extends Channel {
         .executeWith(exec)
         .stopOnFailure()
         .run(
-            entry -> {
-              commitToTable(
-                  entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs);
-            });
+            entry -> commitToTable(
+                entry.getKey(), entry.getValue(), controlTopicOffsets(), validThroughTs));
 
     // we should only get here if all tables committed successfully...
     commitConsumerOffsets();
@@ -186,7 +184,7 @@ class Coordinator extends Channel {
 
     LOG.info(
         "Coordinator {} completed commit {}, committed to {} table(s), valid-through {}",
-        coordinatorId,
+            taskId,
         commitState.currentCommitId(),
         commitMap.size(),
         validThroughTs);
@@ -254,11 +252,11 @@ class Coordinator extends Channel {
 
     if (terminated) {
       throw new ConnectException(
-          String.format("Coordinator %s is terminated, commit aborted", coordinatorId));
+          String.format("Coordinator %s is terminated, commit aborted", taskId));
     }
 
     if (dataFiles.isEmpty() && deleteFiles.isEmpty()) {
-      LOG.info("Nothing to commit to table {}, skipping", tableIdentifier);
+      LOG.info("Coordinator {} found nothing to commit to table {}, skipping", taskId, tableIdentifier);
     } else {
       if (deleteFiles.isEmpty()) {
         AppendFiles appendOp =
@@ -268,7 +266,7 @@ class Coordinator extends Channel {
         }
         appendOp.set(snapshotOffsetsProp, offsetsJson);
         appendOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        appendOp.set(COORDINATOR_ID_SNAPSHOT_PROP, coordinatorId);
+        appendOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           appendOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
         }
@@ -282,7 +280,7 @@ class Coordinator extends Channel {
         }
         deltaOp.set(snapshotOffsetsProp, offsetsJson);
         deltaOp.set(COMMIT_ID_SNAPSHOT_PROP, commitState.currentCommitId().toString());
-        deltaOp.set(COORDINATOR_ID_SNAPSHOT_PROP, coordinatorId);
+        deltaOp.set(TASK_ID_SNAPSHOT_PROP, taskId);
         if (validThroughTs != null) {
           deltaOp.set(VALID_THROUGH_TS_SNAPSHOT_PROP, validThroughTs.toString());
         }
@@ -301,7 +299,7 @@ class Coordinator extends Channel {
 
       LOG.info(
           "Coordinator {} completed commit to table {}, snapshot {}, commit ID {}, valid-through {}",
-          coordinatorId,
+          taskId,
           tableIdentifier,
           snapshotId,
           commitState.currentCommitId(),
@@ -370,7 +368,8 @@ class Coordinator extends Channel {
       return Map.of();
     }
 
-    TypeReference<Map<Integer, Long>> typeRef = new TypeReference<Map<Integer, Long>>() {};
+    TypeReference<Map<Integer, Long>> typeRef = new TypeReference<>() {
+    };
     try {
       return MAPPER.readValue(value, typeRef);
     } catch (IOException e) {
