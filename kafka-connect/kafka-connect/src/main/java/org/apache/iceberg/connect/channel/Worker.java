@@ -54,14 +54,13 @@ class Worker extends Channel {
   private final SinkTaskContext context;
   private final SinkWriter sinkWriter;
 
-  // Queue is unbounded because the coordinator sends at most one START_COMMIT per commit interval.
   // Under normal operation, the main thread drains the queue on every put() call, so the queue
   // depth is effectively bounded by the commit rate.
   private final ConcurrentLinkedQueue<Envelope> controlEventQueue;
   private final ExecutorService pollingExecutor;
   private final AtomicBoolean running;
   private final Duration pollInterval;
-  private final String workerIdentifier;
+  private final String taskId;
   private final AtomicReference<Exception> errorRef = new AtomicReference<>(null);
 
   Worker(
@@ -81,7 +80,7 @@ class Worker extends Channel {
     this.context = context;
     this.sinkWriter = sinkWriter;
 
-    this.workerIdentifier = config.connectorName() + "-" + config.taskId();
+    this.taskId = config.connectorName() + "-" + config.taskId();
     this.controlEventQueue = new ConcurrentLinkedQueue<>();
     this.running = new AtomicBoolean(false);
     this.pollInterval = Duration.ofMillis(config.controlPollIntervalMs());
@@ -106,13 +105,13 @@ class Worker extends Channel {
     try {
       pollingExecutor.execute(this::backgroundPoll);
     } catch (Exception ex) {
-      LOG.error("Worker {} failed to execute the task.", workerIdentifier, ex);
+      LOG.error("Worker {} failed to execute the task.", taskId, ex);
       throw new ConnectException(
-          String.format("Worker %s failed to execute the poll task", workerIdentifier));
+          String.format("Worker %s failed to execute the poll task", taskId));
     }
     LOG.info(
         "Worker {} started with async control event processing (poll interval: {}ms)",
-        workerIdentifier,
+        taskId,
         pollInterval.toMillis());
   }
 
@@ -122,7 +121,7 @@ class Worker extends Channel {
    * thread.
    */
   private void backgroundPoll() {
-    LOG.info("Background control topic polling thread started on {}", workerIdentifier);
+    LOG.info("Background control topic polling thread started on {}", taskId);
     try {
       // Initialize consumer on this thread — KafkaConsumer is NOT thread-safe,
       // so subscribe + all poll calls must happen on the same thread.
@@ -133,17 +132,17 @@ class Worker extends Channel {
           consumeAvailable(pollInterval);
         } catch (WakeupException e) {
           // Expected during shutdown — wakeupConsumer() was called
-          LOG.debug("Consumer wakeup received during shutdown for {}", workerIdentifier, e);
+          LOG.debug("Consumer wakeup received during shutdown for {}", taskId, e);
           break;
         }
       }
     } catch (Exception e) {
       if (running.compareAndSet(true, false)) {
-        LOG.error("Worker {} failed while polling control events", workerIdentifier, e);
+        LOG.error("Worker {} failed while polling control events", taskId, e);
         errorRef.compareAndSet(null, e);
       }
     } finally {
-      LOG.info("Background control topic polling thread stopped on {}", workerIdentifier);
+      LOG.info("Background control topic polling thread stopped on {}", taskId);
     }
   }
 
@@ -156,7 +155,7 @@ class Worker extends Channel {
     Exception ex = errorRef.getAndSet(null);
     if (ex != null) {
       throw new ConnectException(
-          String.format("Worker %s failed while processing async polling.", workerIdentifier), ex);
+          String.format("Worker %s failed while processing async polling.", taskId), ex);
     }
     Envelope envelope;
     while ((envelope = controlEventQueue.poll()) != null) {
@@ -207,7 +206,7 @@ class Worker extends Channel {
   protected boolean receive(Envelope envelope) {
     if (envelope.event().payload().type() == PayloadType.START_COMMIT) {
       controlEventQueue.offer(envelope);
-      LOG.debug("Worker {} buffered START_COMMIT event", workerIdentifier);
+      LOG.debug("Worker {} buffered START_COMMIT event", taskId);
       return true;
     }
     return false;
@@ -215,11 +214,11 @@ class Worker extends Channel {
 
   @Override
   void stop() {
-    LOG.info("Worker {} stopping.", workerIdentifier);
+    LOG.info("Worker {} stopping.", taskId);
     terminateBackGroundPolling();
     sinkWriter.close();
     super.stop();
-    LOG.info("Worker {} stopped.", workerIdentifier);
+    LOG.info("Worker {} stopped.", taskId);
   }
 
   private void terminateBackGroundPolling() {
@@ -230,21 +229,21 @@ class Worker extends Channel {
       if (!pollingExecutor.awaitTermination(1, TimeUnit.MINUTES)) {
         LOG.warn(
             "Polling thread did not terminate in time on worker {}, forcing shutdown",
-            workerIdentifier);
+            taskId);
         throw new ConnectException(
             String.format(
                 "Background polling thread of worker %s did not terminate gracefully.",
-                workerIdentifier));
+                taskId));
       }
     } catch (InterruptedException e) {
       LOG.warn(
           "Worker {} got interrupted while waiting for polling thread shutdown",
-          workerIdentifier,
+          taskId,
           e);
       throw new ConnectException(
           String.format(
               "Background polling thread of worker %s interrupted while closing.",
-              workerIdentifier),
+              taskId),
           e);
     }
     controlEventQueue.clear();
