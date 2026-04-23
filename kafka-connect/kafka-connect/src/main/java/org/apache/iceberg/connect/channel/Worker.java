@@ -87,9 +87,7 @@ class Worker extends Channel {
     this.pollingExecutor =
         Executors.newSingleThreadExecutor(
             r -> {
-              Thread thread =
-                  new Thread(
-                      r, "worker-control-poller-" + taskId);
+              Thread thread = new Thread(r, "worker-control-poller-" + taskId);
               thread.setDaemon(true);
               return thread;
             });
@@ -227,23 +225,16 @@ class Worker extends Channel {
     pollingExecutor.shutdownNow();
     try {
       if (!pollingExecutor.awaitTermination(1, TimeUnit.MINUTES)) {
-        LOG.warn(
-            "Polling thread did not terminate in time on worker {}, forcing shutdown",
-            taskId);
+        LOG.warn("Polling thread did not terminate in time on worker {}, forcing shutdown", taskId);
         throw new ConnectException(
             String.format(
-                "Background polling thread of worker %s did not terminate gracefully.",
-                taskId));
+                "Background polling thread of worker %s did not terminate gracefully.", taskId));
       }
     } catch (InterruptedException e) {
-      LOG.warn(
-          "Worker {} got interrupted while waiting for polling thread shutdown",
-          taskId,
-          e);
+      LOG.warn("Worker {} got interrupted while waiting for polling thread shutdown", taskId, e);
       throw new ConnectException(
           String.format(
-              "Background polling thread of worker %s interrupted while closing.",
-              taskId),
+              "Background polling thread of worker %s interrupted while closing.", taskId),
           e);
     }
     controlEventQueue.clear();
