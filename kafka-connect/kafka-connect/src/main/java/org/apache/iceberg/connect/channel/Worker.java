@@ -89,7 +89,7 @@ class Worker extends Channel {
             r -> {
               Thread thread =
                   new Thread(
-                      r, "worker-control-poller-" + config.connectorName() + "-" + config.taskId());
+                      r, "worker-control-poller-" + taskId);
               thread.setDaemon(true);
               return thread;
             });
