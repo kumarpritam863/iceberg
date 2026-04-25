@@ -43,7 +43,7 @@ import org.apache.kafka.connect.sink.SinkRecord;
  *   <li>{@code lowercase} — lowercase the derived table name (default: true)
  *   <li>{@code ignore-missing-table} — use NoOpWriter for missing tables (default: true)
  *   <li>{@code on-missing-header} — behavior when header is absent: {@code drop}, {@code fail}, or
- *       {@code default:<table>} (default: drop)
+ *       {@code default:{table}} (default: drop)
  *   <li>{@code multi-value} — when multiple headers with same name: {@code first}, {@code last}, or
  *       {@code all} (default: first)
  * </ul>

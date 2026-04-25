@@ -130,47 +130,54 @@ public class FilterRouter implements RecordRouter {
   }
 
   private boolean evaluatePredicates(SinkRecord record) {
-    if (topicRegex != null) {
-      if (record.topic() == null || !topicRegex.matcher(record.topic()).matches()) {
-        return false;
-      }
-    }
+    return matchesTopic(record)
+        && matchesFieldExists(record)
+        && matchesField(record)
+        && matchesHeader(record);
+  }
 
-    if (fieldExists != null) {
-      if (record.value() == null) {
-        return false;
-      }
-      try {
-        Object value = RecordUtils.extractFromRecordValue(record.value(), fieldExists);
-        if (value == null) {
-          return false;
-        }
-      } catch (Exception e) {
-        return false;
-      }
+  private boolean matchesTopic(SinkRecord record) {
+    if (topicRegex == null) {
+      return true;
     }
+    return record.topic() != null && topicRegex.matcher(record.topic()).matches();
+  }
 
-    if (field != null) {
-      String fieldValue = extractFieldValue(record);
-      if (fieldValue == null) {
-        return false;
-      }
-      if (fieldRegex != null && !fieldRegex.matcher(fieldValue).matches()) {
-        return false;
-      }
+  private boolean matchesFieldExists(SinkRecord record) {
+    if (fieldExists == null) {
+      return true;
     }
-
-    if (header != null) {
-      String headerValue = extractHeaderValue(record);
-      if (headerValue == null) {
-        return false;
-      }
-      if (headerRegex != null && !headerRegex.matcher(headerValue).matches()) {
-        return false;
-      }
+    if (record.value() == null) {
+      return false;
     }
+    try {
+      Object value = RecordUtils.extractFromRecordValue(record.value(), fieldExists);
+      return value != null;
+    } catch (Exception e) {
+      return false;
+    }
+  }
 
-    return true;
+  private boolean matchesField(SinkRecord record) {
+    if (field == null) {
+      return true;
+    }
+    String fieldValue = extractFieldValue(record);
+    if (fieldValue == null) {
+      return false;
+    }
+    return fieldRegex == null || fieldRegex.matcher(fieldValue).matches();
+  }
+
+  private boolean matchesHeader(SinkRecord record) {
+    if (header == null) {
+      return true;
+    }
+    String headerValue = extractHeaderValue(record);
+    if (headerValue == null) {
+      return false;
+    }
+    return headerRegex == null || headerRegex.matcher(headerValue).matches();
   }
 
   private String extractFieldValue(SinkRecord record) {
