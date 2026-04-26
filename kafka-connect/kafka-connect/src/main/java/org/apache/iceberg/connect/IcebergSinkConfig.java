@@ -89,7 +89,7 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   /**
    * @deprecated since 1.10.1, will be removed in 2.0.0; the connector now derives the consumer
-   *     group ID automatically from consumer.override.group.id or the connector name.
+   *     group ID automatically from connector/worker config or connector name.
    */
   @Deprecated private static final String CONNECT_GROUP_ID_PROP = "iceberg.connect.group-id";
 
@@ -205,7 +205,7 @@ public class IcebergSinkConfig extends AbstractConfig {
         null,
         Importance.LOW,
         "Deprecated: Name of the Connect consumer group, should not be set under normal conditions."
-            + " Use consumer.override.group.id instead.");
+            + " This will be auto derived based on the connector, worker config or connector name.");
     configDef.define(
         COMMIT_INTERVAL_MS_PROP,
         ConfigDef.Type.INT,
