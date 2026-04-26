@@ -409,14 +409,21 @@ public class IcebergSinkConfig extends AbstractConfig {
     if (deprecatedResult != null) {
       LOG.warn(
           "Property '{}' is deprecated and will be removed in 2.0.0. "
-              + "Use 'consumer.override.group.id' instead.",
+              + "Connect group-id will be auto derived based on the connector config and worker config.",
           CONNECT_GROUP_ID_PROP);
       return deprecatedResult;
     }
 
-    String result = originalProps.get("consumer.override.group.id");
-    if (result != null) {
-      return result;
+    // Connector-level override (requires ConnectorClientConfigOverridePolicy to allow it)
+    String connectorOverride = originalProps.get("consumer.override.group.id");
+    if (connectorOverride != null) {
+      return connectorOverride;
+    }
+
+    // Worker-level consumer config (always applied by the framework, no policy check)
+    String workerConsumerGroupId = kafkaProps.get("consumer.group.id");
+    if (workerConsumerGroupId != null) {
+      return workerConsumerGroupId;
     }
 
     String connectorName = connectorName();
