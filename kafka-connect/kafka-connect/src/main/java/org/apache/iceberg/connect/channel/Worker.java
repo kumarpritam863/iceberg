@@ -96,7 +96,7 @@ class Worker extends Channel {
             .map(
                 writeResult ->
                     new Event(
-                        config.sourceConsumerGroupId(),
+                        config.connectGroupId(),
                         new DataWritten(
                             writeResult.partitionStruct(),
                             commitId,
@@ -106,7 +106,7 @@ class Worker extends Channel {
             .collect(Collectors.toList());
 
     Event readyEvent =
-        new Event(config.sourceConsumerGroupId(), new DataComplete(commitId, assignments));
+        new Event(config.connectGroupId(), new DataComplete(commitId, assignments));
     events.add(readyEvent);
 
     send(events, results.sourceOffsets());

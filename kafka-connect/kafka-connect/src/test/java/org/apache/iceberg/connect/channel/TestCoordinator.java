@@ -189,7 +189,7 @@ public class TestCoordinator extends ChannelTestBase {
 
     Event commitResponse =
         new Event(
-            config.sourceConsumerGroupId(),
+            config.connectGroupId(),
             new DataWritten(
                 StructType.of(),
                 commitId,
@@ -201,7 +201,7 @@ public class TestCoordinator extends ChannelTestBase {
 
     Event commitReady =
         new Event(
-            config.sourceConsumerGroupId(),
+            config.connectGroupId(),
             new DataComplete(
                 commitId, ImmutableList.of(new TopicPartitionOffset("topic", 1, 1L, ts))));
     bytes = AvroUtil.encode(commitReady);

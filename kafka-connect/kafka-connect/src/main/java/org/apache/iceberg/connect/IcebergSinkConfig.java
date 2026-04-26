@@ -403,7 +403,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     return getString(CONTROL_GROUP_ID_PREFIX_PROP);
   }
 
-  public String sourceConsumerGroupId() {
+  public String connectGroupId() {
     // Check deprecated property first for backwards compatibility
     String deprecatedResult = getString(CONNECT_GROUP_ID_PROP);
     if (deprecatedResult != null) {
