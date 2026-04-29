@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 public class CommitterImpl implements Committer {
 
   private static final Logger LOG = LoggerFactory.getLogger(CommitterImpl.class);
+  private static final long COORDINATOR_STOP_TIMEOUT_MS = 30_000L;
 
   private CoordinatorThread coordinatorThread;
   private Worker worker;
@@ -164,7 +165,7 @@ public class CommitterImpl implements Committer {
 
     // Defensive: close called without prior initialization (should not happen).
     if (!isInitialized.get()) {
-      LOG.warn("Close unexpectedly called on committer {} without partition assignment", taskId);
+      LOG.warn("Close unexpectedly called without partition assignment");
       return;
     }
 
@@ -232,9 +233,25 @@ public class CommitterImpl implements Committer {
   }
 
   private void stopCoordinator() {
-    if (coordinatorThread != null) {
-      coordinatorThread.terminate();
-      coordinatorThread = null;
+    if (coordinatorThread == null) {
+      return;
     }
+
+    coordinatorThread.terminate();
+
+    try {
+      // Joining the coordinator thread here to make sure coordinator thread is completed before electing another coordinator
+      coordinatorThread.join(COORDINATOR_STOP_TIMEOUT_MS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+
+    if (coordinatorThread.isAlive()) {
+      LOG.error(
+              "Coordinator thread {} did not stop within {}ms — possible resource leak",
+              taskId,
+              COORDINATOR_STOP_TIMEOUT_MS);
+    }
+    coordinatorThread = null;
   }
 }
