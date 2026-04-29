@@ -240,7 +240,8 @@ public class CommitterImpl implements Committer {
     coordinatorThread.terminate();
 
     try {
-      // Joining the coordinator thread here to make sure coordinator thread is completed before electing another coordinator
+      // Joining the coordinator thread here to make sure coordinator thread is completed before
+      // electing another coordinator
       coordinatorThread.join(COORDINATOR_STOP_TIMEOUT_MS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -248,9 +249,9 @@ public class CommitterImpl implements Committer {
 
     if (coordinatorThread.isAlive()) {
       LOG.error(
-              "Coordinator thread {} did not stop within {}ms — possible resource leak",
-              taskId,
-              COORDINATOR_STOP_TIMEOUT_MS);
+          "Coordinator thread {} did not stop within {}ms — possible resource leak",
+          taskId,
+          COORDINATOR_STOP_TIMEOUT_MS);
     }
     coordinatorThread = null;
   }
