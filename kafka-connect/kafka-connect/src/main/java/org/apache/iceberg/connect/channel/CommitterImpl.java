@@ -188,7 +188,7 @@ public class CommitterImpl implements Committer {
     if (worker != null) {
       try {
         worker.process();
-      } catch (ConnectException e) {
+      } catch (Exception e) {
         LOG.error(
             "Worker {}-{} failed during control event processing, stopping worker.",
             config.connectorName(),
