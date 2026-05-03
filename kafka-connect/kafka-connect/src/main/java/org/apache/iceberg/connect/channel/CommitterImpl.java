@@ -190,7 +190,7 @@ public class CommitterImpl implements Committer {
         worker.process();
       } catch (ConnectException e) {
         LOG.error(
-            "Worker {}-{} failed during control event processing, stopping worker",
+            "Worker {}-{} failed during control event processing, stopping worker.",
             config.connectorName(),
             config.taskId(),
             e);
