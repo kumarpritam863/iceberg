@@ -87,6 +87,8 @@ for exactly-once semantics. This requires Kafka 2.5 or later.
 | iceberg.hadoop-conf-dir                    | If specified, Hadoop config files in this directory will be loaded                                               |
 | iceberg.hadoop.*                           | Properties passed through to the Hadoop configuration                                                            |
 | iceberg.kafka.*                            | Properties passed through to control topic Kafka client initialization                                           |
+| iceberg.committer.class                    | Fully qualified class name of a custom `Committer` implementation. The class must implement `org.apache.iceberg.connect.Committer` and provide a public no-arg constructor. If unset, the built-in committer is used. |
+| iceberg.committer.*                        | Properties forwarded to a custom `Committer` via `IcebergSinkConfig.committerProps()` (with the `iceberg.committer.` prefix stripped)                                                                                  |
 
 If `iceberg.tables.dynamic-enabled` is `false` (the default) then you must specify `iceberg.tables`. If
 `iceberg.tables.dynamic-enabled` is `true` then you must specify `iceberg.tables.route-field` which will

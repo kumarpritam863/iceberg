@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
+import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
 import org.junit.jupiter.api.Test;
 
@@ -109,5 +110,53 @@ public class TestIcebergSinkConfig {
 
     result = IcebergSinkConfig.checkClassName("org.apache.kafka.clients.producer.KafkaProducer");
     assertThat(result).isFalse();
+  }
+
+  @Test
+  public void testCommitterClassConfigDefined() {
+    ConfigDef.ConfigKey key =
+        IcebergSinkConfig.CONFIG_DEF.configKeys().get(IcebergSinkConfig.COMMITTER_CLASS_PROP);
+    assertThat(key).isNotNull();
+    assertThat(key.type).isEqualTo(ConfigDef.Type.STRING);
+    assertThat(key.importance).isEqualTo(ConfigDef.Importance.MEDIUM);
+    assertThat(key.defaultValue).isNull();
+  }
+
+  @Test
+  public void testCommitterClassAndPropsAccessors() {
+    Map<String, String> props =
+        ImmutableMap.of(
+            "iceberg.catalog.type",
+            "rest",
+            "topics",
+            "source-topic",
+            "iceberg.tables",
+            "db.landing",
+            IcebergSinkConfig.COMMITTER_CLASS_PROP,
+            "com.foo.X",
+            "iceberg.committer.retry",
+            "7");
+
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+
+    assertThat(config.committerClass()).isEqualTo("com.foo.X");
+    // committerProps() returns the iceberg.committer.* map with the prefix stripped.
+    // The .class key is included because committerProps() is a generic prefix strip; custom
+    // implementations can ignore it.
+    assertThat(config.committerProps())
+        .containsEntry("class", "com.foo.X")
+        .containsEntry("retry", "7");
+  }
+
+  @Test
+  public void testCommitterClassDefaultsToNull() {
+    Map<String, String> props =
+        ImmutableMap.of(
+            "iceberg.catalog.type", "rest",
+            "topics", "source-topic",
+            "iceberg.tables", "db.landing");
+    IcebergSinkConfig config = new IcebergSinkConfig(props);
+    assertThat(config.committerClass()).isNull();
+    assertThat(config.committerProps()).isEmpty();
   }
 }

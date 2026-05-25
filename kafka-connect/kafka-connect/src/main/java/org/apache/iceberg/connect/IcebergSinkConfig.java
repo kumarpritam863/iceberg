@@ -63,6 +63,9 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String TABLE_PROP_PREFIX = "iceberg.table.";
   private static final String AUTO_CREATE_PROP_PREFIX = "iceberg.tables.auto-create-props.";
   private static final String WRITE_PROP_PREFIX = "iceberg.tables.write-props.";
+  private static final String COMMITTER_PROP_PREFIX = "iceberg.committer.";
+
+  public static final String COMMITTER_CLASS_PROP = "iceberg.committer.class";
 
   private static final String CATALOG_NAME_PROP = "iceberg.catalog";
   private static final String TABLES_PROP = "iceberg.tables";
@@ -235,6 +238,16 @@ public class IcebergSinkConfig extends AbstractConfig {
         120000L,
         Importance.LOW,
         "config to control coordinator executor keep alive time");
+    configDef.define(
+        COMMITTER_CLASS_PROP,
+        ConfigDef.Type.STRING,
+        null,
+        Importance.MEDIUM,
+        "Fully qualified class name of a custom Committer implementation. "
+            + "The class must implement org.apache.iceberg.connect.Committer and provide a "
+            + "public no-arg constructor. Properties under iceberg.committer.* (other than "
+            + ".class) are exposed to the implementation via IcebergSinkConfig.committerProps(). "
+            + "If unset, the built-in CommitterImpl is used.");
     return configDef;
   }
 
@@ -244,6 +257,7 @@ public class IcebergSinkConfig extends AbstractConfig {
   private final Map<String, String> kafkaProps;
   private final Map<String, String> autoCreateProps;
   private final Map<String, String> writeProps;
+  private final Map<String, String> committerProps;
   private final Map<String, TableSinkConfig> tableConfigMap = Maps.newConcurrentMap();
   private final JsonConverter jsonConverter;
 
@@ -260,6 +274,7 @@ public class IcebergSinkConfig extends AbstractConfig {
     this.autoCreateProps =
         PropertyUtil.propertiesWithPrefix(originalProps, AUTO_CREATE_PROP_PREFIX);
     this.writeProps = PropertyUtil.propertiesWithPrefix(originalProps, WRITE_PROP_PREFIX);
+    this.committerProps = PropertyUtil.propertiesWithPrefix(originalProps, COMMITTER_PROP_PREFIX);
 
     this.jsonConverter = new JsonConverter();
     jsonConverter.configure(
@@ -321,6 +336,14 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public Map<String, String> writeProps() {
     return writeProps;
+  }
+
+  public Map<String, String> committerProps() {
+    return committerProps;
+  }
+
+  public String committerClass() {
+    return getString(COMMITTER_CLASS_PROP);
   }
 
   public String catalogName() {
