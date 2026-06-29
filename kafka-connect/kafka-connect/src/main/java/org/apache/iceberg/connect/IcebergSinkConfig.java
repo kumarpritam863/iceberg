@@ -84,6 +84,8 @@ public class IcebergSinkConfig extends AbstractConfig {
       "iceberg.tables.schema-case-insensitive";
   private static final String CONTROL_TOPIC_PROP = "iceberg.control.topic";
   private static final String CONTROL_GROUP_ID_PREFIX_PROP = "iceberg.control.group-id-prefix";
+  private static final String COORDINATOR_ELECTION_TOPIC_PROP =
+      "iceberg.coordinator.election-topic";
   private static final String COMMIT_INTERVAL_MS_PROP = "iceberg.control.commit.interval-ms";
   private static final int COMMIT_INTERVAL_MS_DEFAULT = 300_000;
   private static final String COMMIT_TIMEOUT_MS_PROP = "iceberg.control.commit.timeout-ms";
@@ -196,6 +198,15 @@ public class IcebergSinkConfig extends AbstractConfig {
         DEFAULT_CONTROL_GROUP_PREFIX,
         Importance.LOW,
         "Prefix of the control consumer group");
+    configDef.define(
+        COORDINATOR_ELECTION_TOPIC_PROP,
+        ConfigDef.Type.STRING,
+        null,
+        Importance.LOW,
+        "Topic whose single partition is used to elect the commit coordinator. Must have exactly "
+            + "one partition. Defaults to the control topic, which may be reused when it has a single "
+            + "partition; otherwise set this to a dedicated single-partition topic. Only used by the "
+            + "election-topic committer.");
     configDef.define(
         CONNECT_GROUP_ID_PROP,
         ConfigDef.Type.STRING,
@@ -417,6 +428,14 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public String controlGroupIdPrefix() {
     return getString(CONTROL_GROUP_ID_PREFIX_PROP);
+  }
+
+  public String coordinatorElectionTopic() {
+    String result = getString(COORDINATOR_ELECTION_TOPIC_PROP);
+    if (result == null || result.trim().isEmpty()) {
+      return controlTopic();
+    }
+    return result.trim();
   }
 
   public String connectGroupId() {

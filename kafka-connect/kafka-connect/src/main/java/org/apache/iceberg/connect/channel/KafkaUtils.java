@@ -25,6 +25,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.DescribeConsumerGroupsResult;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -50,6 +51,19 @@ class KafkaUtils {
     } catch (InterruptedException | ExecutionException e) {
       throw new ConnectException(
           "Cannot retrieve members for consumer group: " + consumerGroupId, e);
+    }
+  }
+
+  static int describeTopicPartitionCount(String topic, Admin admin) {
+    try {
+      TopicDescription description =
+          admin.describeTopics(ImmutableList.of(topic)).allTopicNames().get().get(topic);
+      return description.partitions().size();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ConnectException("Interrupted while describing topic: " + topic, e);
+    } catch (ExecutionException e) {
+      throw new ConnectException("Cannot describe topic: " + topic, e);
     }
   }
 
