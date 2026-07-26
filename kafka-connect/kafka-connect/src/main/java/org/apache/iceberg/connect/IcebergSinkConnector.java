@@ -54,7 +54,7 @@ public class IcebergSinkConnector extends SinkConnector {
         .mapToObj(
             i -> {
               Map<String, String> map = Maps.newHashMap(props);
-              map.put(IcebergSinkConfig.INTERNAL_TRANSACTIONAL_SUFFIX_PROP, txnSuffix + i);
+              map.put(IcebergSinkConfig.INTERNAL_TRANSACTIONAL_SUFFIX_PROP, txnSuffix);
               map.put("task.id", String.valueOf(i));
               return map;
             })
