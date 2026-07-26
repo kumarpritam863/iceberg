@@ -20,109 +20,72 @@ package org.apache.iceberg.connect.channel;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
-import org.apache.iceberg.connect.IcebergSinkConfig;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
+import java.util.Set;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
-import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.ConsumerGroupDescription;
-import org.apache.kafka.clients.admin.MemberAssignment;
-import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 
 public class TestCommitterImpl {
 
   @Test
-  public void testIsLeader() {
-    MemberAssignment assignment1 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic1", 0), new TopicPartition("topic2", 1)));
-    MemberDescription member1 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment1);
-
-    MemberAssignment assignment2 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1)));
-    MemberDescription member2 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment2);
-
-    List<MemberDescription> members = ImmutableList.of(member1, member2);
-
-    List<TopicPartition> leaderAssignments =
-        ImmutableList.of(new TopicPartition("topic2", 1), new TopicPartition("topic1", 0));
-    List<TopicPartition> nonLeaderAssignments =
-        ImmutableList.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1));
-
-    CommitterImpl committer = new CommitterImpl();
-    assertThat(committer.containsFirstPartition(members, leaderAssignments)).isTrue();
-    assertThat(committer.containsFirstPartition(members, nonLeaderAssignments)).isFalse();
+  public void testLeaderPartitionIsLowestSubscribedTopicPartitionZero() {
+    // Minimum under (topic, partition) ordering is always partition 0 of the smallest topic name.
+    assertThat(CommitterImpl.leaderPartition(ImmutableSet.of("topic-b", "topic-a", "topic-c")))
+        .contains(new TopicPartition("topic-a", 0));
   }
 
   @Test
-  public void testHasLeaderPartition() throws NoSuchFieldException, IllegalAccessException {
-    MemberAssignment assignment1 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic1", 0), new TopicPartition("topic2", 1)));
-    MemberDescription member1 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment1);
-
-    MemberAssignment assignment2 =
-        new MemberAssignment(
-            ImmutableSet.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1)));
-    MemberDescription member2 =
-        new MemberDescription(null, Optional.empty(), null, null, assignment2);
-
-    List<MemberDescription> members = ImmutableList.of(member1, member2);
-
-    List<TopicPartition> leaderAssignments =
-        ImmutableList.of(new TopicPartition("topic2", 1), new TopicPartition("topic1", 0));
-    List<TopicPartition> nonLeaderAssignments =
-        ImmutableList.of(new TopicPartition("topic2", 0), new TopicPartition("topic1", 1));
-
-    CommitterImpl committer = new CommitterImpl();
-    Field configField = CommitterImpl.class.getDeclaredField("config");
-    Field clientFactoryField = CommitterImpl.class.getDeclaredField("clientFactory");
-    configField.setAccessible(true);
-    clientFactoryField.setAccessible(true);
-
-    IcebergSinkConfig config = mock(IcebergSinkConfig.class);
-    when(config.connectGroupId()).thenReturn("test-group");
-    configField.set(committer, config);
-
-    KafkaClientFactory clientFactory = mock(KafkaClientFactory.class);
-    Admin admin = mock(Admin.class);
-    when(clientFactory.createAdmin()).thenReturn(admin);
-    clientFactoryField.set(committer, clientFactory);
-
-    try (MockedStatic<KafkaUtils> mockKafkaUtils = mockStatic(KafkaUtils.class)) {
-      ConsumerGroupDescription consumerGroupDescription = mock(ConsumerGroupDescription.class);
-      mockKafkaUtils
-          .when(() -> KafkaUtils.consumerGroupDescription(any(), any()))
-          .thenReturn(consumerGroupDescription);
-
-      when(consumerGroupDescription.members()).thenReturn(members);
-
-      assertThat(committer.hasLeaderPartition(leaderAssignments)).isTrue();
-      assertThat(committer.hasLeaderPartition(nonLeaderAssignments)).isFalse();
-    }
+  public void testLeaderPartitionEmptyWhenSubscriptionUnresolved() {
+    assertThat(CommitterImpl.leaderPartition(ImmutableSet.of())).isEmpty();
   }
 
   @Test
-  public void testCommitFailurePropagatesAsNotRunningException()
-      throws NoSuchFieldException, IllegalAccessException {
+  public void testReconcileDoesNotStartCoordinatorWhenNotLeader() throws Exception {
+    CommitterImpl committer = new CommitterImpl();
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    // Owns a partition of the lowest topic, but not partition 0 → not the leader.
+    when(context.assignment()).thenReturn(ImmutableSet.of(new TopicPartition("topic-a", 1)));
+    setField(committer, "context", context);
+    setField(committer, "consumer", mockConsumer(ImmutableSet.of("topic-a", "topic-b")));
+
+    committer.save(Collections.emptyList());
+
+    assertThat(getField(committer, "coordinatorThread")).isNull();
+  }
+
+  @Test
+  public void testReconcileStopsCoordinatorWhenLeaderPartitionLost() throws Exception {
+    CommitterImpl committer = new CommitterImpl();
+
+    SinkTaskContext context = mock(SinkTaskContext.class);
+    when(context.assignment()).thenReturn(ImmutableSet.of(new TopicPartition("topic-a", 1)));
+    setField(committer, "context", context);
+    setField(committer, "consumer", mockConsumer(ImmutableSet.of("topic-a")));
+    setField(committer, "coordinatorMetrics", CoordinatorMetrics.attach("test-connector"));
+
+    CoordinatorThread coordinatorThread = mock(CoordinatorThread.class);
+    when(coordinatorThread.isTerminated()).thenReturn(false);
+    setField(committer, "coordinatorThread", coordinatorThread);
+
+    committer.save(Collections.emptyList());
+
+    verify(coordinatorThread).terminate();
+    assertThat(getField(committer, "coordinatorThread")).isNull();
+  }
+
+  @Test
+  public void testCommitFailurePropagatesAsNotRunningException() throws Exception {
     Coordinator coordinator = mock(Coordinator.class);
     doThrow(new RuntimeException("commit failed")).when(coordinator).process();
 
@@ -134,9 +97,10 @@ public class TestCommitterImpl {
     assertThat(coordinatorThread.isTerminated()).isTrue();
 
     CommitterImpl committer = new CommitterImpl();
-    Field field = CommitterImpl.class.getDeclaredField("coordinatorThread");
-    field.setAccessible(true);
-    field.set(committer, coordinatorThread);
+    setField(committer, "coordinatorThread", coordinatorThread);
+    // Empty subscription → reconcile resolves no leader and returns before touching the
+    // coordinator, so processControlEvents surfaces the terminated thread.
+    setField(committer, "consumer", mockConsumer(ImmutableSet.of()));
 
     assertThatThrownBy(() -> committer.save(Collections.emptyList()))
         .isInstanceOf(NotRunningException.class)
@@ -144,8 +108,7 @@ public class TestCommitterImpl {
   }
 
   @Test
-  public void testStartFailurePropagatesAsNotRunningException()
-      throws NoSuchFieldException, IllegalAccessException {
+  public void testStartFailurePropagatesAsNotRunningException() throws Exception {
     Coordinator coordinator = mock(Coordinator.class);
     doThrow(new RuntimeException("start failed")).when(coordinator).start();
 
@@ -157,12 +120,33 @@ public class TestCommitterImpl {
     assertThat(coordinatorThread.isTerminated()).isTrue();
 
     CommitterImpl committer = new CommitterImpl();
-    Field field = CommitterImpl.class.getDeclaredField("coordinatorThread");
-    field.setAccessible(true);
-    field.set(committer, coordinatorThread);
+    setField(committer, "coordinatorThread", coordinatorThread);
+    // Empty subscription → reconcile resolves no leader and returns before touching the
+    // coordinator, so processControlEvents surfaces the terminated thread.
+    setField(committer, "consumer", mockConsumer(ImmutableSet.of()));
 
     assertThatThrownBy(() -> committer.save(Collections.emptyList()))
         .isInstanceOf(NotRunningException.class)
         .hasMessageContaining("Coordinator unexpectedly terminated");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Consumer<byte[], byte[]> mockConsumer(Set<String> subscription) {
+    Consumer<byte[], byte[]> consumer = mock(Consumer.class);
+    when(consumer.subscription()).thenReturn(subscription);
+    return consumer;
+  }
+
+  private static void setField(CommitterImpl committer, String name, Object value)
+      throws Exception {
+    Field field = CommitterImpl.class.getDeclaredField(name);
+    field.setAccessible(true);
+    field.set(committer, value);
+  }
+
+  private static Object getField(CommitterImpl committer, String name) throws Exception {
+    Field field = CommitterImpl.class.getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(committer);
   }
 }

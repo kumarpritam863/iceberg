@@ -57,8 +57,7 @@ class KafkaUtils {
     return kafkaConsumer(context).groupMetadata();
   }
 
-  static void seekToLastCommittedOffsets(SinkTaskContext context) {
-    Consumer<byte[], byte[]> consumer = kafkaConsumer(context);
+  static void seekToLastCommittedOffsets(Consumer<byte[], byte[]> consumer) {
     if (consumer == null) {
       return;
     }
@@ -85,7 +84,7 @@ class KafkaUtils {
   }
 
   @SuppressWarnings("unchecked")
-  private static Consumer<byte[], byte[]> kafkaConsumer(SinkTaskContext context) {
+  static Consumer<byte[], byte[]> kafkaConsumer(SinkTaskContext context) {
     String contextClassName = context.getClass().getName();
     try {
       return ((Consumer<byte[], byte[]>)

@@ -20,15 +20,16 @@ package org.apache.iceberg.connect.channel;
 
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.connect.Committer;
 import org.apache.iceberg.connect.IcebergSinkConfig;
 import org.apache.iceberg.connect.data.SinkWriter;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
-import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.ConsumerGroupDescription;
-import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
@@ -45,86 +46,23 @@ public class CommitterImpl implements Committer {
   private IcebergSinkConfig config;
   private SinkTaskContext context;
   private KafkaClientFactory clientFactory;
-  private Collection<MemberDescription> membersWhenWorkerIsCoordinator;
-  private final AtomicBoolean isInitialized = new AtomicBoolean(false);
   private String taskId;
 
-  private void initialize(
-      Catalog icebergCatalog,
-      IcebergSinkConfig icebergSinkConfig,
-      SinkTaskContext sinkTaskContext) {
-    if (isInitialized.compareAndSet(false, true)) {
-      this.catalog = icebergCatalog;
-      this.config = icebergSinkConfig;
-      this.context = sinkTaskContext;
-      this.clientFactory = new KafkaClientFactory(config.kafkaProps());
-      this.taskId = config.connectorName() + "-" + config.taskId();
-    }
-  }
+  // Partition 0 of the lowest subscribed source topic; whoever owns it runs the coordinator.
+  private TopicPartition leaderTopicPartition;
 
-  static class TopicPartitionComparator implements Comparator<TopicPartition> {
+  // The sink task's own consumer, resolved once via reflection and reused as the
+  // WorkerSinkTaskContext consumer is created once per task and stable for its lifetime.
+  private Consumer<byte[], byte[]> consumer;
 
-    @Override
-    public int compare(TopicPartition o1, TopicPartition o2) {
-      int result = o1.topic().compareTo(o2.topic());
-      if (result == 0) {
-        result = Integer.compare(o1.partition(), o2.partition());
-      }
-      return result;
-    }
-  }
+  // Per-connector active-coordinator gauge, shared across this connector's tasks in the JVM.
+  private CoordinatorMetrics coordinatorMetrics;
 
   @VisibleForTesting
-  boolean hasLeaderPartition(Collection<TopicPartition> currentAssignedPartitions) {
-    ConsumerGroupDescription groupDesc;
-    try (Admin admin = clientFactory.createAdmin()) {
-      groupDesc = KafkaUtils.consumerGroupDescription(config.connectGroupId(), admin);
-    }
-
-    Collection<MemberDescription> members = groupDesc.members();
-    if (containsFirstPartition(members, currentAssignedPartitions)) {
-      membersWhenWorkerIsCoordinator = members;
-      return true;
-    }
-
-    return false;
-  }
-
-  @VisibleForTesting
-  boolean containsFirstPartition(
-      Collection<MemberDescription> members, Collection<TopicPartition> partitions) {
-    // Determine the first partition across all members to elect the leader
-    TopicPartition firstTopicPartition = findFirstTopicPartition(members);
-
-    if (firstTopicPartition == null) {
-      LOG.warn(
-          "Committer {} found no partitions assigned across all members, cannot determine leader",
-          taskId);
-      return false;
-    }
-
-    boolean containsFirst = partitions.contains(firstTopicPartition);
-    if (containsFirst) {
-      LOG.info(
-          "Committer {} contains the first partition {}, this task is the leader",
-          taskId,
-          firstTopicPartition);
-    } else {
-      LOG.debug(
-          "Committer {} does not contain the first partition {}, not the leader",
-          taskId,
-          firstTopicPartition);
-    }
-
-    return containsFirst;
-  }
-
-  @VisibleForTesting
-  TopicPartition findFirstTopicPartition(Collection<MemberDescription> members) {
-    return members.stream()
-        .flatMap(member -> member.assignment().topicPartitions().stream())
-        .min(new TopicPartitionComparator())
-        .orElse(null);
+  static Optional<TopicPartition> leaderPartition(Set<String> subscription) {
+    return subscription.stream()
+        .min(Comparator.naturalOrder())
+        .map(topic -> new TopicPartition(topic, 0));
   }
 
   @Override
@@ -142,13 +80,7 @@ public class CommitterImpl implements Committer {
       Catalog icebergCatalog,
       IcebergSinkConfig icebergSinkConfig,
       SinkTaskContext sinkTaskContext,
-      Collection<TopicPartition> addedPartitions) {
-    initialize(icebergCatalog, icebergSinkConfig, sinkTaskContext);
-    if (hasLeaderPartition(addedPartitions)) {
-      LOG.info("Committer {} received leader partition. Starting Coordinator.", taskId);
-      startCoordinator();
-    }
-  }
+      Collection<TopicPartition> addedPartitions) {}
 
   @Override
   public void stop() {
@@ -160,39 +92,159 @@ public class CommitterImpl implements Committer {
   @Override
   public void close(Collection<TopicPartition> closedPartitions) {
     // Always try to stop the worker to avoid duplicates.
-    stopWorker();
-
-    // Defensive: close called without prior initialization (should not happen).
-    if (!isInitialized.get()) {
-      LOG.warn("Close unexpectedly called on committer {} without partition assignment", taskId);
-      return;
+    if (worker != null) {
+      worker.stop();
+      worker = null;
     }
 
-    // Empty partitions → task was stopped explicitly. Stop coordinator if running.
+    // Empty partitions → the task is being stopped entirely. There will be no further save() to
+    // reconcile the coordinator away, so tear it down now (this is the only unconditional stop).
     if (closedPartitions.isEmpty()) {
-      LOG.info("Committer {} stopped. Closing coordinator.", taskId);
-      stopCoordinator();
+      if (null != coordinatorThread) {
+        LOG.info("Committer {} stopped. Closing coordinator.", taskId);
+        stopCoordinator();
+      }
+      // Task is stopping for good: release its metrics reference so a deleted connector's MBean is
+      // unregistered once its last task in this JVM has gone.
+      if (coordinatorMetrics != null) {
+        coordinatorMetrics.detach();
+        coordinatorMetrics = null;
+      }
       return;
     }
 
-    // Normal close: if leader partition is lost, stop coordinator.
-    if (hasLeaderPartition(closedPartitions)) {
-      LOG.info("Committer {} lost leader partition. Stopping coordinator.", taskId);
-      stopCoordinator();
-    }
-
-    // Reset offsets to last committed to avoid data loss.
+    // Partial revoke while the task keeps running: if this removed the leader partition, the next
+    // save() reconcile stops the coordinator. Just reset offsets to last committed to avoid dupes.
     LOG.info("Seeking to last committed offsets for worker {}.", taskId);
-    KafkaUtils.seekToLastCommittedOffsets(context);
+    try {
+      KafkaUtils.seekToLastCommittedOffsets(consumer());
+    } catch (RuntimeException e) {
+      // Best effort: a resolution failure here only risks reprocessing (dedup/OCC keep it safe),
+      // so never let it break the revoke path.
+      LOG.warn("Committer {} could not seek to last committed offsets", taskId, e);
+    }
   }
 
   @Override
   public void save(Collection<SinkRecord> sinkRecords) {
     if (sinkRecords != null && !sinkRecords.isEmpty()) {
-      startWorker();
+      if (null == this.worker) {
+        LOG.info("Starting commit worker {}", taskId);
+        SinkWriter sinkWriter = new SinkWriter(catalog, config);
+        worker = new Worker(config, clientFactory, sinkWriter, context);
+        worker.start();
+      }
       worker.save(sinkRecords);
     }
+    reconcileCoordinator();
     processControlEvents();
+  }
+
+  @Override
+  public void configure(
+      Catalog icebergCatalog,
+      IcebergSinkConfig icebergSinkConfig,
+      SinkTaskContext sinkTaskContext) {
+    this.catalog = icebergCatalog;
+    this.config = icebergSinkConfig;
+    this.context = sinkTaskContext;
+    this.clientFactory = new KafkaClientFactory(config.kafkaProps());
+    this.taskId = config.connectorName() + "-" + config.taskId();
+    this.coordinatorMetrics = CoordinatorMetrics.attach(config.connectorName());
+  }
+
+  /**
+   * Level-triggered leadership reconciliation on the Connect task thread. Reads the election key
+   * and the source-partition count from the task's own consumer (no Admin call), and starts/stops
+   * the coordinator so that exactly the owner of {@code leaderTopicPartition} runs it.
+   */
+  private void reconcileCoordinator() {
+    Set<String> subscription;
+    try {
+      subscription = consumer().subscription();
+    } catch (RuntimeException e) {
+      // Degrade rather than crash the task: retry on the next cycle. A persistent failure surfaces
+      // as coordinator absence (control-topic lag / no commits), which is diagnosable, instead of a
+      // per-save crash loop.
+      LOG.warn(
+          "Committer {} could not read source consumer subscription for leader election, "
+              + "will retry on next cycle",
+          taskId,
+          e);
+      return;
+    }
+
+    // Advance the election key only when the subscription is resolvable. Keeping the last-known key
+    // on a transient empty subscription avoids flapping the coordinator; re-reading each cycle lets
+    // the key converge (self-heal) if the lowest subscribed topic changes under a regex pattern.
+    leaderPartition(subscription).ifPresent(tp -> this.leaderTopicPartition = tp);
+    if (leaderTopicPartition == null) {
+      LOG.debug(
+          "Committer {} cannot determine leader partition yet (subscription={})",
+          taskId,
+          subscription);
+      return;
+    }
+
+    boolean leader = context.assignment().contains(leaderTopicPartition);
+    if (leader && null == this.coordinatorThread) {
+      startCoordinator(sourcePartitionCount(consumer, subscription));
+    } else if (!leader && null != this.coordinatorThread) {
+      LOG.info(
+          "Committer {} no longer owns leader partition {}, stopping coordinator",
+          taskId,
+          leaderTopicPartition);
+      stopCoordinator();
+    }
+  }
+
+  private void startCoordinator(int topicPartitionCount) {
+    LOG.info(
+        "Task {} elected leader (owns {}), starting commit coordinator for {} source partition(s)",
+        taskId,
+        leaderTopicPartition,
+        topicPartitionCount);
+    Coordinator coordinator =
+        new Coordinator(catalog, config, topicPartitionCount, clientFactory, context);
+    coordinatorThread = new CoordinatorThread(coordinator);
+    coordinatorThread.start();
+    coordinatorMetrics.coordinatorStarted();
+  }
+
+  private void stopCoordinator() {
+    if (coordinatorThread != null) {
+      coordinatorThread.terminate();
+      coordinatorThread = null;
+      coordinatorMetrics.coordinatorStopped();
+    }
+  }
+
+  /**
+   * The sink task's own Kafka consumer, resolved lazily once and cached. Resolution goes through a
+   * reflective field lookup ({@link KafkaUtils#kafkaConsumer}); the consumer instance is stable for
+   * the task's lifetime, so caching keeps that lookup off the per-{@code save()} hot path. Not
+   * cached on failure, so a transient resolution error simply retries on the next cycle.
+   */
+  private Consumer<byte[], byte[]> consumer() {
+    if (consumer == null) {
+      consumer = KafkaUtils.kafkaConsumer(context);
+    }
+    return consumer;
+  }
+
+  /**
+   * Total source-partition count across the subscribed topics, from the consumer's cached cluster
+   * metadata (no Admin call). Used as the coordinator's commit-readiness quorum.
+   */
+  private int sourcePartitionCount(Consumer<byte[], byte[]> consumer, Set<String> subscription) {
+    int total = 0;
+    for (String topic : subscription) {
+      List<PartitionInfo> partitions = consumer.partitionsFor(topic);
+      if (partitions != null) {
+        total += partitions.size();
+      }
+    }
+    return total;
   }
 
   private void processControlEvents() {
@@ -202,39 +254,6 @@ public class CommitterImpl implements Committer {
     }
     if (worker != null) {
       worker.process();
-    }
-  }
-
-  private void startWorker() {
-    if (null == this.worker) {
-      LOG.info("Starting commit worker {}", taskId);
-      SinkWriter sinkWriter = new SinkWriter(catalog, config);
-      worker = new Worker(config, clientFactory, sinkWriter, context);
-      worker.start();
-    }
-  }
-
-  private void startCoordinator() {
-    if (null == this.coordinatorThread) {
-      LOG.info("Task {} elected leader, starting commit coordinator", taskId);
-      Coordinator coordinator =
-          new Coordinator(catalog, config, membersWhenWorkerIsCoordinator, clientFactory, context);
-      coordinatorThread = new CoordinatorThread(coordinator);
-      coordinatorThread.start();
-    }
-  }
-
-  private void stopWorker() {
-    if (worker != null) {
-      worker.stop();
-      worker = null;
-    }
-  }
-
-  private void stopCoordinator() {
-    if (coordinatorThread != null) {
-      coordinatorThread.terminate();
-      coordinatorThread = null;
     }
   }
 }

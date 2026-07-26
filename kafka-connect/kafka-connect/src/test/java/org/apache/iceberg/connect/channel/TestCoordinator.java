@@ -188,8 +188,7 @@ public class TestCoordinator extends ChannelTestBase {
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    Coordinator coordinator = new Coordinator(catalog, config, 0, clientFactory, context);
     coordinator.start();
     initConsumer();
 
@@ -234,8 +233,7 @@ public class TestCoordinator extends ChannelTestBase {
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    Coordinator coordinator = new Coordinator(catalog, config, 0, clientFactory, context);
     coordinator.start();
     initConsumer();
 
@@ -270,8 +268,7 @@ public class TestCoordinator extends ChannelTestBase {
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    Coordinator coordinator = new Coordinator(catalog, config, 0, clientFactory, context);
     coordinator.start();
     initConsumer();
 
@@ -342,8 +339,7 @@ public class TestCoordinator extends ChannelTestBase {
     when(config.commitTimeoutMs()).thenReturn(Integer.MAX_VALUE);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    Coordinator coordinator = new Coordinator(catalog, config, 0, clientFactory, context);
     coordinator.start();
 
     // init consumer after subscribe()
@@ -399,8 +395,7 @@ public class TestCoordinator extends ChannelTestBase {
     when(catalog.loadTable(TABLE_IDENTIFIER)).thenReturn(spiedTable);
 
     SinkTaskContext context = mock(SinkTaskContext.class);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, ImmutableList.of(), clientFactory, context);
+    Coordinator coordinator = new Coordinator(catalog, config, 0, clientFactory, context);
     coordinator.start();
 
     initConsumer();

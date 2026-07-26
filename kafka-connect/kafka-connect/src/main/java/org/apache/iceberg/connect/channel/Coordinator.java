@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -61,7 +60,6 @@ import org.apache.iceberg.relocated.com.google.common.collect.Streams;
 import org.apache.iceberg.relocated.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.iceberg.util.SnapshotUtil;
 import org.apache.iceberg.util.Tasks;
-import org.apache.kafka.clients.admin.MemberDescription;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.slf4j.Logger;
@@ -90,7 +88,7 @@ class Coordinator extends Channel {
   Coordinator(
       Catalog catalog,
       IcebergSinkConfig config,
-      Collection<MemberDescription> members,
+      int topicPartitionCount,
       KafkaClientFactory clientFactory,
       SinkTaskContext context) {
     // pass consumer group ID to which we commit low watermark offsets
@@ -98,8 +96,7 @@ class Coordinator extends Channel {
 
     this.catalog = catalog;
     this.config = config;
-    this.totalPartitionCount =
-        members.stream().mapToInt(desc -> desc.assignment().topicPartitions().size()).sum();
+    this.totalPartitionCount = topicPartitionCount;
     this.snapshotOffsetsProp =
         String.format(
             "kafka.connect.offsets.%s.%s", config.controlTopic(), config.connectGroupId());
