@@ -48,9 +48,6 @@ public class CommitterImpl implements Committer {
   private KafkaClientFactory clientFactory;
   private String taskId;
 
-  // Partition 0 of the lowest subscribed source topic; whoever owns it runs the coordinator.
-  private TopicPartition leaderTopicPartition;
-
   // The sink task's own consumer, resolved once via reflection and reused as the
   // WorkerSinkTaskContext consumer is created once per task and stable for its lifetime.
   private Consumer<byte[], byte[]> consumer;
@@ -80,7 +77,28 @@ public class CommitterImpl implements Committer {
       Catalog icebergCatalog,
       IcebergSinkConfig icebergSinkConfig,
       SinkTaskContext sinkTaskContext,
-      Collection<TopicPartition> addedPartitions) {}
+      Collection<TopicPartition> addedPartitions) {
+    Set<String> subscriptions = consumer.subscription();
+    Optional<TopicPartition> leaderTopicPartition = leaderPartition(subscriptions);
+    if (leaderTopicPartition.isEmpty()) {
+      LOG.info("Committer {} could not find the leaderPartition. Will wait for kafka to make assignment.", taskId);
+      return;
+    }
+
+    if (addedPartitions.contains(leaderTopicPartition.get()) && null != coordinatorThread) {
+      int sourceTopicPartitionCount = sourceTopicPartitionCount(subscriptions);
+      LOG.info(
+              "Task {} elected leader (owns {}), starting commit coordinator for {} source partition(s)",
+              taskId,
+              leaderTopicPartition.get(),
+              sourceTopicPartitionCount);
+      Coordinator coordinator =
+              new Coordinator(catalog, config, sourceTopicPartitionCount, clientFactory, context);
+      coordinatorThread = new CoordinatorThread(coordinator);
+      coordinatorThread.start();
+      coordinatorMetrics.coordinatorStarted();
+    }
+  }
 
   @Override
   public void stop() {
@@ -102,7 +120,9 @@ public class CommitterImpl implements Committer {
     if (closedPartitions.isEmpty()) {
       if (null != coordinatorThread) {
         LOG.info("Committer {} stopped. Closing coordinator.", taskId);
-        stopCoordinator();
+        coordinatorThread.terminate();
+        coordinatorThread = null;
+        coordinatorMetrics.coordinatorStopped();
       }
       // Task is stopping for good: release its metrics reference so a deleted connector's MBean is
       // unregistered once its last task in this JVM has gone.
@@ -111,6 +131,16 @@ public class CommitterImpl implements Committer {
         coordinatorMetrics = null;
       }
       return;
+    }
+
+    Optional<TopicPartition> leaderTopicPartition = leaderPartition(consumer.subscription());
+    if (leaderTopicPartition.isEmpty()) {
+      LOG.info("Committer {} could not find the leaderTopicPartition. Will wait for kafka to make a proper close call.", taskId);
+    } else if (closedPartitions.contains(leaderTopicPartition.get()) && null != coordinatorThread) {
+      LOG.info("Committer {} lost the leaderTopicPartition {}. Stopping coordinator.", taskId, leaderTopicPartition);
+      coordinatorThread.terminate();
+      coordinatorThread = null;
+      coordinatorMetrics.coordinatorStopped();
     }
 
     // Partial revoke while the task keeps running: if this removed the leader partition, the next
@@ -136,7 +166,6 @@ public class CommitterImpl implements Committer {
       }
       worker.save(sinkRecords);
     }
-    reconcileCoordinator();
     processControlEvents();
   }
 
@@ -151,72 +180,6 @@ public class CommitterImpl implements Committer {
     this.clientFactory = new KafkaClientFactory(config.kafkaProps());
     this.taskId = config.connectorName() + "-" + config.taskId();
     this.coordinatorMetrics = CoordinatorMetrics.attach(config.connectorName());
-  }
-
-  /**
-   * Level-triggered leadership reconciliation on the Connect task thread. Reads the election key
-   * and the source-partition count from the task's own consumer (no Admin call), and starts/stops
-   * the coordinator so that exactly the owner of {@code leaderTopicPartition} runs it.
-   */
-  private void reconcileCoordinator() {
-    Set<String> subscription;
-    try {
-      subscription = consumer().subscription();
-    } catch (RuntimeException e) {
-      // Degrade rather than crash the task: retry on the next cycle. A persistent failure surfaces
-      // as coordinator absence (control-topic lag / no commits), which is diagnosable, instead of a
-      // per-save crash loop.
-      LOG.warn(
-          "Committer {} could not read source consumer subscription for leader election, "
-              + "will retry on next cycle",
-          taskId,
-          e);
-      return;
-    }
-
-    // Advance the election key only when the subscription is resolvable. Keeping the last-known key
-    // on a transient empty subscription avoids flapping the coordinator; re-reading each cycle lets
-    // the key converge (self-heal) if the lowest subscribed topic changes under a regex pattern.
-    leaderPartition(subscription).ifPresent(tp -> this.leaderTopicPartition = tp);
-    if (leaderTopicPartition == null) {
-      LOG.debug(
-          "Committer {} cannot determine leader partition yet (subscription={})",
-          taskId,
-          subscription);
-      return;
-    }
-
-    boolean leader = context.assignment().contains(leaderTopicPartition);
-    if (leader && null == this.coordinatorThread) {
-      startCoordinator(sourcePartitionCount(subscription));
-    } else if (!leader && null != this.coordinatorThread) {
-      LOG.info(
-          "Committer {} no longer owns leader partition {}, stopping coordinator",
-          taskId,
-          leaderTopicPartition);
-      stopCoordinator();
-    }
-  }
-
-  private void startCoordinator(int topicPartitionCount) {
-    LOG.info(
-        "Task {} elected leader (owns {}), starting commit coordinator for {} source partition(s)",
-        taskId,
-        leaderTopicPartition,
-        topicPartitionCount);
-    Coordinator coordinator =
-        new Coordinator(catalog, config, topicPartitionCount, clientFactory, context);
-    coordinatorThread = new CoordinatorThread(coordinator);
-    coordinatorThread.start();
-    coordinatorMetrics.coordinatorStarted();
-  }
-
-  private void stopCoordinator() {
-    if (coordinatorThread != null) {
-      coordinatorThread.terminate();
-      coordinatorThread = null;
-      coordinatorMetrics.coordinatorStopped();
-    }
   }
 
   /**
@@ -236,7 +199,7 @@ public class CommitterImpl implements Committer {
    * Total source-partition count across the subscribed topics, from the consumer's cached cluster
    * metadata (no Admin call). Used as the coordinator's commit-readiness quorum.
    */
-  private int sourcePartitionCount(Set<String> subscription) {
+  private int sourceTopicPartitionCount(Set<String> subscription) {
     int total = 0;
     for (String topic : subscription) {
       List<PartitionInfo> partitions = consumer.partitionsFor(topic);

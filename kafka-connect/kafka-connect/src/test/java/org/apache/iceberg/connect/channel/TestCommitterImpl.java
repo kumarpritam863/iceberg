@@ -61,7 +61,7 @@ public class TestCommitterImpl {
 
     committer.save(Collections.emptyList());
 
-    assertThat(getField(committer, "coordinatorThread")).isNull();
+    assertThat(getField(committer)).isNull();
   }
 
   @Test
@@ -81,7 +81,7 @@ public class TestCommitterImpl {
     committer.save(Collections.emptyList());
 
     verify(coordinatorThread).terminate();
-    assertThat(getField(committer, "coordinatorThread")).isNull();
+    assertThat(getField(committer)).isNull();
   }
 
   @Test
@@ -144,8 +144,8 @@ public class TestCommitterImpl {
     field.set(committer, value);
   }
 
-  private static Object getField(CommitterImpl committer, String name) throws Exception {
-    Field field = CommitterImpl.class.getDeclaredField(name);
+  private static Object getField(CommitterImpl committer) throws Exception {
+    Field field = CommitterImpl.class.getDeclaredField("coordinatorThread");
     field.setAccessible(true);
     return field.get(committer);
   }
