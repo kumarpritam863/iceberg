@@ -188,7 +188,7 @@ public class CommitterImpl implements Committer {
 
     boolean leader = context.assignment().contains(leaderTopicPartition);
     if (leader && null == this.coordinatorThread) {
-      startCoordinator(sourcePartitionCount(consumer, subscription));
+      startCoordinator(sourcePartitionCount(subscription));
     } else if (!leader && null != this.coordinatorThread) {
       LOG.info(
           "Committer {} no longer owns leader partition {}, stopping coordinator",
@@ -236,7 +236,7 @@ public class CommitterImpl implements Committer {
    * Total source-partition count across the subscribed topics, from the consumer's cached cluster
    * metadata (no Admin call). Used as the coordinator's commit-readiness quorum.
    */
-  private int sourcePartitionCount(Consumer<byte[], byte[]> consumer, Set<String> subscription) {
+  private int sourcePartitionCount(Set<String> subscription) {
     int total = 0;
     for (String topic : subscription) {
       List<PartitionInfo> partitions = consumer.partitionsFor(topic);
