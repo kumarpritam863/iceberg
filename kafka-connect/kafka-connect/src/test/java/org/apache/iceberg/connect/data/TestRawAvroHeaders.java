@@ -93,6 +93,21 @@ public class TestRawAvroHeaders {
   }
 
   @Test
+  public void testCoordinatesObjectIsCachedNotJustTheSchema() {
+    RawAvroHeaders headers = new RawAvroHeaders();
+
+    RawAvroHeaders.Coordinates first = headers.read(record("com.example.Event", "1", SCHEMA_JSON));
+    RawAvroHeaders.Coordinates second = headers.read(record("com.example.Event", "1", SCHEMA_JSON));
+
+    // Same object, so the per-record path allocates no Coordinates and no cache-key string beyond
+    // the
+    // lookup itself.
+    assertThat(second).isSameAs(first);
+    // And the key is built once, for downstream per-version caches to reuse.
+    assertThat(first.cacheKey()).isEqualTo("com.example.Event/1");
+  }
+
+  @Test
   public void testCacheIsScopedPerInstanceNotGlobal() {
     // A global cache keyed on name and version would hand back the first schema here, silently
     // writing records under the wrong schema.

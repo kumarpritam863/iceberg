@@ -51,7 +51,7 @@ class EncodedAvroWriterFactory implements FileWriterFactory<RawAvroPayload> {
   private final org.apache.avro.Schema fileSchema;
   private final String schemaName;
   private final int schemaVersion;
-  private final org.apache.iceberg.Schema icebergSchema;
+  private final String icebergSchemaJson;
   private final CodecFactory codec;
   private final Map<String, String> metadata;
 
@@ -65,7 +65,9 @@ class EncodedAvroWriterFactory implements FileWriterFactory<RawAvroPayload> {
     this.fileSchema = fileSchema;
     this.schemaName = schemaName;
     this.schemaVersion = schemaVersion;
-    this.icebergSchema = icebergSchema;
+    // Serialized once per factory rather than once per file: files roll by size and are
+    // reopened on every flush, and a wide schema is not cheap to serialize.
+    this.icebergSchemaJson = org.apache.iceberg.SchemaParser.toJson(icebergSchema);
     this.codec = toCodec(codecName);
     this.metadata = ImmutableMap.copyOf(metadata);
   }
@@ -78,7 +80,7 @@ class EncodedAvroWriterFactory implements FileWriterFactory<RawAvroPayload> {
             fileSchema,
             schemaName,
             schemaVersion,
-            icebergSchema,
+            icebergSchemaJson,
             file.encryptingOutputFile(),
             codec,
             metadata,

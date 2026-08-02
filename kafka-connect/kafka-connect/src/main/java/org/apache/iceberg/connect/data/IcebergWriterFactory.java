@@ -94,7 +94,13 @@ class IcebergWriterFactory {
       // Connect-schema inference loses. Field ids assigned here are provisional --
       // TableMetadata.newTableMetadata runs assignFreshIds on create -- so the annotator must read
       // ids back from the created table.
-      structType = AvroSchemaUtil.toIceberg(RawAvroHeaders.parse(sample).writerSchema()).asStruct();
+      //
+      // It also carries Avro `doc` strings, which some catalogs publish as column comments. Glue
+      // rejects a comment containing a newline, and multi-line docs are ordinary, so normalize
+      // them.
+      structType =
+          SchemaDocs.sanitize(AvroSchemaUtil.toIceberg(RawAvroHeaders.parse(sample).writerSchema()))
+              .asStruct();
     } else if (sample.valueSchema() == null) {
       Type type = SchemaUtils.inferIcebergType(sample.value(), config);
       if (type == null) {

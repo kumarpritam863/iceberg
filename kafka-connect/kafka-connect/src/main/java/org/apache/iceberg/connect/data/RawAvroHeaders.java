@@ -67,18 +67,32 @@ class RawAvroHeaders {
   static final String SCHEMA = "iceberg.avro.schema";
 
   /** Keyed by "name/version". Small and stable; a task writes a handful of live versions. */
-  private final Map<String, Schema> cache = Maps.newHashMap();
+  private final Map<String, Coordinates> cache = Maps.newHashMap();
 
-  /** The writer schema's identity and definition, as described by a record's headers. */
+  /**
+   * The writer schema's identity and definition, as described by a record's headers. Immutable and
+   * cached per version, so the per-record path allocates none of this.
+   */
   static class Coordinates {
     private final String schemaName;
     private final int schemaVersion;
     private final Schema writerSchema;
+    private final String cacheKey;
 
-    private Coordinates(String schemaName, int schemaVersion, Schema writerSchema) {
+    private Coordinates(
+        String schemaName, int schemaVersion, Schema writerSchema, String cacheKey) {
       this.schemaName = schemaName;
       this.schemaVersion = schemaVersion;
       this.writerSchema = writerSchema;
+      this.cacheKey = cacheKey;
+    }
+
+    /**
+     * "name/version". Shared so downstream per-version caches key off the same string rather than
+     * rebuilding it per record.
+     */
+    String cacheKey() {
+      return cacheKey;
     }
 
     String schemaName() {
@@ -110,7 +124,7 @@ class RawAvroHeaders {
   static Coordinates parse(SinkRecord record) {
     String name = requireString(record, SCHEMA_NAME);
     int version = version(record);
-    return new Coordinates(name, version, parseSchema(record, name, version));
+    return new Coordinates(name, version, parseSchema(record, name, version), name + "/" + version);
   }
 
   /**
@@ -124,14 +138,15 @@ class RawAvroHeaders {
     int version = version(record);
 
     String cacheKey = name + "/" + version;
-    Schema cached = cache.get(cacheKey);
+    Coordinates cached = cache.get(cacheKey);
     if (cached != null) {
-      return new Coordinates(name, version, cached);
+      return cached;
     }
 
-    Schema parsed = parseSchema(record, name, version);
-    cache.put(cacheKey, parsed);
-    return new Coordinates(name, version, parsed);
+    Coordinates coordinates =
+        new Coordinates(name, version, parseSchema(record, name, version), cacheKey);
+    cache.put(cacheKey, coordinates);
+    return coordinates;
   }
 
   private static int version(SinkRecord record) {

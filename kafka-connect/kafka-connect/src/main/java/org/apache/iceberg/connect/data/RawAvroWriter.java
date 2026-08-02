@@ -120,12 +120,13 @@ class RawAvroWriter implements RecordWriter {
       return;
     }
 
-    RawAvroPayload payload = toPayload(record);
+    RawAvroHeaders.Coordinates coordinates = headers.read(record);
+    RawAvroPayload payload = toPayload(record, coordinates);
 
     // Deliberately outside the try below. Preparing a writer can fail because the schema is
     // ineligible or the table cannot be evolved -- those are configuration faults that should fail
     // the task, not per-record DataExceptions that send every record to the dead-letter queue.
-    RollingDataWriter<RawAvroPayload> writer = writerFor(payload);
+    RollingDataWriter<RawAvroPayload> writer = writerFor(payload, coordinates);
 
     try {
       writer.write(payload);
@@ -151,9 +152,7 @@ class RawAvroWriter implements RecordWriter {
    * length prefix. A {@link ByteBuffer} is passed through without copying; a {@code byte[]} is
    * wrapped.
    */
-  private RawAvroPayload toPayload(SinkRecord record) {
-    RawAvroHeaders.Coordinates coordinates = headers.read(record);
-
+  private RawAvroPayload toPayload(SinkRecord record, RawAvroHeaders.Coordinates coordinates) {
     Object value = record.value();
     ByteBuffer bytes;
     if (value instanceof ByteBuffer) {
@@ -173,19 +172,28 @@ class RawAvroWriter implements RecordWriter {
         bytes, coordinates.writerSchema(), coordinates.schemaName(), coordinates.schemaVersion());
   }
 
-  private RollingDataWriter<RawAvroPayload> writerFor(RawAvroPayload payload) {
-    String key = payload.schemaName() + "/" + payload.schemaVersion();
+  private RollingDataWriter<RawAvroPayload> writerFor(
+      RawAvroPayload payload, RawAvroHeaders.Coordinates coordinates) {
+    // Key built once per version by RawAvroHeaders, not rebuilt per record.
+    String key = coordinates.cacheKey();
 
     // Preparing the schema also decides whether this version can be partitioned at all, so it has
     // to
-    // run before the extractor is built.
-    org.apache.avro.Schema annotated =
-        annotatedSchemas.computeIfAbsent(key, notUsed -> prepareSchema(payload));
+    // run before the extractor is built. get-then-put rather than computeIfAbsent: the lambda would
+    // capture `payload` and allocate on every record, cache hit included.
+    org.apache.avro.Schema annotated = annotatedSchemas.get(key);
+    if (annotated == null) {
+      annotated = prepareSchema(payload);
+      annotatedSchemas.put(key, annotated);
+    }
 
     StructLike partition = partitionFor(key, annotated, payload);
 
-    StructLikeMap<RollingDataWriter<RawAvroPayload>> byPartition =
-        writers.computeIfAbsent(key, notUsed -> StructLikeMap.create(table.spec().partitionType()));
+    StructLikeMap<RollingDataWriter<RawAvroPayload>> byPartition = writers.get(key);
+    if (byPartition == null) {
+      byPartition = StructLikeMap.create(table.spec().partitionType());
+      writers.put(key, byPartition);
+    }
 
     RollingDataWriter<RawAvroPayload> writer = byPartition.get(partition);
     if (writer == null) {
@@ -209,10 +217,13 @@ class RawAvroWriter implements RecordWriter {
       return EMPTY_PARTITION;
     }
 
-    RawAvroPartitionExtractor extractor =
-        extractors.computeIfAbsent(
-            key, notUsed -> new RawAvroPartitionExtractor(table.spec(), table.schema(), annotated));
-    return extractor.partition(payload.payload().duplicate());
+    RawAvroPartitionExtractor extractor = extractors.get(key);
+    if (extractor == null) {
+      extractor = new RawAvroPartitionExtractor(table.spec(), table.schema(), annotated);
+      extractors.put(key, extractor);
+    }
+    // No duplicate() needed: the extractor reads array/offset/length and never touches position.
+    return extractor.partition(payload.payload());
   }
 
   private RollingDataWriter<RawAvroPayload> newWriter(
@@ -318,7 +329,10 @@ class RawAvroWriter implements RecordWriter {
    * contain them.
    */
   private void evolveTable(RawAvroPayload payload, List<String> unmatched) {
-    org.apache.iceberg.Schema fromAvro = AvroSchemaUtil.toIceberg(payload.writerSchema());
+    // Sanitized for the same reason as auto-create: an added column's doc becomes a catalog column
+    // comment, and Glue rejects newlines in one.
+    org.apache.iceberg.Schema fromAvro =
+        SchemaDocs.sanitize(AvroSchemaUtil.toIceberg(payload.writerSchema()));
 
     UpdateSchema update = table.updateSchema();
     boolean any = false;

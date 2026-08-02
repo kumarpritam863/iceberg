@@ -81,6 +81,9 @@ public class TestEncodedAvroFileAppender {
                   NestedField.required(23, "inner_id", Types.StringType.get()),
                   NestedField.optional(24, "inner_count", Types.IntegerType.get()))));
 
+  private static final String TABLE_SCHEMA_JSON =
+      org.apache.iceberg.SchemaParser.toJson(TABLE_SCHEMA);
+
   /**
    * The schema a Kafka producer would use: identical structure and identical binary layout to the
    * table's canonical Avro schema, but with no Iceberg id properties — which is the shape a
@@ -122,7 +125,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             out,
             org.apache.avro.file.CodecFactory.nullCodec(),
             ImmutableMap.of(),
@@ -168,7 +171,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             new InMemoryOutputFile(),
             org.apache.avro.file.CodecFactory.nullCodec(),
             ImmutableMap.of(),
@@ -204,7 +207,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             new InMemoryOutputFile(),
             org.apache.avro.file.CodecFactory.nullCodec(),
             ImmutableMap.of(),
@@ -228,7 +231,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             new InMemoryOutputFile(),
             org.apache.avro.file.CodecFactory.nullCodec(),
             ImmutableMap.of(),
@@ -273,7 +276,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             out,
             org.apache.avro.file.CodecFactory.deflateCodec(6),
             ImmutableMap.of(),
@@ -304,7 +307,7 @@ public class TestEncodedAvroFileAppender {
             fileSchema,
             "Event",
             1,
-            TABLE_SCHEMA,
+            TABLE_SCHEMA_JSON,
             out,
             org.apache.avro.file.CodecFactory.nullCodec(),
             ImmutableMap.of(),

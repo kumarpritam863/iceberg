@@ -26,7 +26,6 @@ import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.io.DatumWriter;
 import org.apache.avro.io.Encoder;
 import org.apache.iceberg.Metrics;
-import org.apache.iceberg.SchemaParser;
 import org.apache.iceberg.exceptions.RuntimeIOException;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.OutputFile;
@@ -86,7 +85,7 @@ class EncodedAvroFileAppender implements FileAppender<RawAvroPayload> {
       Schema fileSchema,
       String expectedSchemaName,
       int expectedSchemaVersion,
-      org.apache.iceberg.Schema icebergSchema,
+      String icebergSchemaJson,
       OutputFile file,
       CodecFactory codec,
       Map<String, String> metadata,
@@ -99,7 +98,7 @@ class EncodedAvroFileAppender implements FileAppender<RawAvroPayload> {
     dataFileWriter.setCodec(codec);
     // Iceberg's Avro appender records the table schema in the file header; keep parity so tooling
     // that reads iceberg.schema behaves the same for raw-written files.
-    dataFileWriter.setMeta("iceberg.schema", SchemaParser.toJson(icebergSchema));
+    dataFileWriter.setMeta("iceberg.schema", icebergSchemaJson);
     for (Map.Entry<String, String> entry : metadata.entrySet()) {
       dataFileWriter.setMeta(entry.getKey(), entry.getValue());
     }
