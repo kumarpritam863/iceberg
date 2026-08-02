@@ -56,6 +56,16 @@ project(':iceberg-kafka-connect:iceberg-kafka-connect') {
     testImplementation libs.hadoop3.client
     testRuntimeOnly project(':iceberg-parquet')
     testRuntimeOnly project(':iceberg-orc')
+
+    // JMH source set: the module declares the Kafka APIs compileOnly, so the benchmark
+    // source set has to pull them in (plus Hadoop, for HadoopTables-backed fixtures).
+    jmhImplementation libs.kafka.clients
+    jmhImplementation libs.kafka.connect.api
+    jmhImplementation libs.kafka.connect.json
+    jmhImplementation libs.hadoop3.client
+    jmhImplementation libs.avro.avro
+    jmhImplementation project(':iceberg-data')
+    jmhImplementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
   }
 
   test {

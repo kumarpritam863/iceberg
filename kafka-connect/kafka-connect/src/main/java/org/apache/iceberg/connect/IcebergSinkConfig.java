@@ -73,6 +73,14 @@ public class IcebergSinkConfig extends AbstractConfig {
   private static final String TABLES_DEFAULT_PARTITION_BY = "iceberg.tables.default-partition-by";
   private static final String TABLES_AUTO_CREATE_ENABLED_PROP =
       "iceberg.tables.auto-create-enabled";
+
+  /**
+   * Opt in to appending Avro-encoded Kafka payloads into Iceberg Avro data files without decoding
+   * them. Requires a value converter that emits {@code
+   * org.apache.iceberg.connect.data.RawAvroPayload}.
+   */
+  public static final String RAW_AVRO_ENABLED_PROP = "iceberg.tables.raw-avro-enabled";
+
   private static final String TABLES_EVOLVE_SCHEMA_ENABLED_PROP =
       "iceberg.tables.evolve-schema-enabled";
   private static final String TABLES_SCHEMA_FORCE_OPTIONAL_PROP =
@@ -161,6 +169,14 @@ public class IcebergSinkConfig extends AbstractConfig {
         false,
         Importance.MEDIUM,
         "Set to true to automatically create destination tables, false otherwise");
+    configDef.define(
+        RAW_AVRO_ENABLED_PROP,
+        ConfigDef.Type.BOOLEAN,
+        true,
+        Importance.MEDIUM,
+        "Set to true to append Avro-encoded record values into Iceberg Avro data files without "
+            + "decoding them. Requires a value converter that emits RawAvroPayload, an Avro-format "
+            + "table, and an unpartitioned table.");
     configDef.define(
         TABLES_SCHEMA_FORCE_OPTIONAL_PROP,
         ConfigDef.Type.BOOLEAN,
@@ -449,6 +465,10 @@ public class IcebergSinkConfig extends AbstractConfig {
 
   public boolean autoCreateEnabled() {
     return getBoolean(TABLES_AUTO_CREATE_ENABLED_PROP);
+  }
+
+  public boolean rawAvroEnabled() {
+    return getBoolean(RAW_AVRO_ENABLED_PROP);
   }
 
   public boolean evolveSchemaEnabled() {

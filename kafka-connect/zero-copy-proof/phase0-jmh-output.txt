@@ -1,0 +1,234 @@
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.baseline_memcpyOnly
+
+# Run progress: 0.00% complete, ETA 00:09:20
+# Fork: 1 of 1
+# Warmup Iteration   1: 10.158 ns/op
+# Warmup Iteration   2: 10.213 ns/op
+# Warmup Iteration   3: 10.649 ns/op
+Iteration   1: 10.371 ns/op
+Iteration   2: 10.009 ns/op
+Iteration   3: 9.822 ns/op
+Iteration   4: 9.697 ns/op
+Iteration   5: 9.752 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.baseline_memcpyOnly":
+  9.930 ±(99.9%) 1.052 ns/op [Average]
+  (min, avg, max) = (9.697, 9.930, 10.371), stdev = 0.273
+  CI (99.9%): [8.878, 10.982] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.proposed_appendEncoded
+
+# Run progress: 14.29% complete, ETA 00:08:07
+# Fork: 1 of 1
+# Warmup Iteration   1: 24.692 ns/op
+# Warmup Iteration   2: 23.562 ns/op
+# Warmup Iteration   3: 22.930 ns/op
+Iteration   1: 21.882 ns/op
+Iteration   2: 22.778 ns/op
+Iteration   3: 22.847 ns/op
+Iteration   4: 21.730 ns/op
+Iteration   5: 21.824 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.proposed_appendEncoded":
+  22.212 ±(99.9%) 2.122 ns/op [Average]
+  (min, avg, max) = (21.730, 22.212, 22.847), stdev = 0.551
+  CI (99.9%): [20.090, 24.334] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage1_decodeToGenericRecord
+
+# Run progress: 28.57% complete, ETA 00:06:47
+# Fork: 1 of 1
+# Warmup Iteration   1: 626.998 ns/op
+# Warmup Iteration   2: 596.437 ns/op
+# Warmup Iteration   3: 699.771 ns/op
+Iteration   1: 671.480 ns/op
+Iteration   2: 606.797 ns/op
+Iteration   3: 603.066 ns/op
+Iteration   4: 772.528 ns/op
+Iteration   5: 634.974 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage1_decodeToGenericRecord":
+  657.769 ±(99.9%) 268.635 ns/op [Average]
+  (min, avg, max) = (603.066, 657.769, 772.528), stdev = 69.764
+  CI (99.9%): [389.134, 926.404] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage2_genericRecordToStructLowerBound
+
+# Run progress: 42.86% complete, ETA 00:05:25
+# Fork: 1 of 1
+# Warmup Iteration   1: 1585.549 ns/op
+# Warmup Iteration   2: 1596.567 ns/op
+# Warmup Iteration   3: 1629.944 ns/op
+Iteration   1: 1605.742 ns/op
+Iteration   2: 1583.053 ns/op
+Iteration   3: 1603.893 ns/op
+Iteration   4: 1574.819 ns/op
+Iteration   5: 1585.414 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage2_genericRecordToStructLowerBound":
+  1590.584 ±(99.9%) 52.334 ns/op [Average]
+  (min, avg, max) = (1574.819, 1590.584, 1605.742), stdev = 13.591
+  CI (99.9%): [1538.250, 1642.918] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage3_structToIcebergRecord
+
+# Run progress: 57.14% complete, ETA 00:04:04
+# Fork: 1 of 1
+# Warmup Iteration   1: 1425.030 ns/op
+# Warmup Iteration   2: 1422.879 ns/op
+# Warmup Iteration   3: 1415.907 ns/op
+Iteration   1: 1447.151 ns/op
+Iteration   2: 1437.819 ns/op
+Iteration   3: 1415.900 ns/op
+Iteration   4: 1413.110 ns/op
+Iteration   5: 1426.514 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage3_structToIcebergRecord":
+  1428.099 ±(99.9%) 55.583 ns/op [Average]
+  (min, avg, max) = (1413.110, 1428.099, 1447.151), stdev = 14.435
+  CI (99.9%): [1372.516, 1483.682] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage4_appendIcebergRecord
+
+# Run progress: 71.43% complete, ETA 00:02:42
+# Fork: 1 of 1
+# Warmup Iteration   1: 951.800 ns/op
+# Warmup Iteration   2: 923.103 ns/op
+# Warmup Iteration   3: 931.650 ns/op
+Iteration   1: 994.635 ns/op
+Iteration   2: 940.737 ns/op
+Iteration   3: 929.352 ns/op
+Iteration   4: 976.885 ns/op
+Iteration   5: 930.413 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.stage4_appendIcebergRecord":
+  954.404 ±(99.9%) 114.130 ns/op [Average]
+  (min, avg, max) = (929.352, 954.404, 994.635), stdev = 29.639
+  CI (99.9%): [840.274, 1068.534] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 17.0.19, OpenJDK 64-Bit Server VM, 17.0.19+10-LTS
+# VM invoker: /Library/Java/JavaVirtualMachines/applejdk-17.0.19.10.1.jdk/Contents/Home/bin/java
+# VM options: -Xmx32g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 10 s each
+# Measurement: 5 iterations, 10 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.today_fourStagePipeline
+
+# Run progress: 85.71% complete, ETA 00:01:21
+# Fork: 1 of 1
+# Warmup Iteration   1: 6373.281 ns/op
+# Warmup Iteration   2: 6102.183 ns/op
+# Warmup Iteration   3: 6119.538 ns/op
+Iteration   1: 6137.435 ns/op
+Iteration   2: 6214.871 ns/op
+Iteration   3: 6132.132 ns/op
+Iteration   4: 6230.021 ns/op
+Iteration   5: 6449.134 ns/op
+
+
+Result "org.apache.iceberg.connect.data.ZeroCopyAvroBenchmark.today_fourStagePipeline":
+  6232.718 ±(99.9%) 495.963 ns/op [Average]
+  (min, avg, max) = (6132.132, 6232.718, 6449.134), stdev = 128.800
+  CI (99.9%): [5736.755, 6728.682] (assumes normal distribution)
+
+
+# Run complete. Total time: 00:09:29
+
+REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+experiments, perform baseline and negative tests that provide experimental control, make sure
+the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+Do not assume the numbers tell you what you want them to tell.
+
+NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+extra caution when trusting the results, look into the generated code to check the benchmark still
+works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+different JVMs are already problematic, the performance difference caused by different Blackhole
+modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+
+Benchmark                                                     Mode  Cnt     Score     Error  Units
+ZeroCopyAvroBenchmark.baseline_memcpyOnly                     avgt    5     9.930 ±   1.052  ns/op
+ZeroCopyAvroBenchmark.proposed_appendEncoded                  avgt    5    22.212 ±   2.122  ns/op
+ZeroCopyAvroBenchmark.stage1_decodeToGenericRecord            avgt    5   657.769 ± 268.635  ns/op
+ZeroCopyAvroBenchmark.stage2_genericRecordToStructLowerBound  avgt    5  1590.584 ±  52.334  ns/op
+ZeroCopyAvroBenchmark.stage3_structToIcebergRecord            avgt    5  1428.099 ±  55.583  ns/op
+ZeroCopyAvroBenchmark.stage4_appendIcebergRecord              avgt    5   954.404 ± 114.130  ns/op
+ZeroCopyAvroBenchmark.today_fourStagePipeline                 avgt    5  6232.718 ± 495.963  ns/op
+
+Benchmark result is saved to /Users/pritamkumar863/Desktop/apdp/work/personal/open_source_forks/iceberg/kafka-connect/kafka-connect/build/reports/jmh/results.json

@@ -26,6 +26,10 @@ def sparkVersions = (System.getProperty("sparkVersions") != null ? System.getPro
 def scalaVersion = System.getProperty("scalaVersion") != null ? System.getProperty("scalaVersion") : System.getProperty("defaultScalaVersion")
 def jmhProjects = [project(":iceberg-core"), project(":iceberg-data")]
 
+if (System.getProperty("kafkaVersions") == null || !System.getProperty("kafkaVersions").isEmpty()) {
+  jmhProjects.add(project(":iceberg-kafka-connect:iceberg-kafka-connect"))
+}
+
 if (flinkVersions.contains("1.20")) {
   jmhProjects.add(project(":iceberg-flink:iceberg-flink-1.20"))
 }

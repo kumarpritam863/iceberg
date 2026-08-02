@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.avro.AvroSchemaUtil;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
@@ -77,13 +78,24 @@ class IcebergWriterFactory {
     }
     TableReference tableReference = TableReference.of(catalog.name(), identifier, tableUuid);
 
+    if (config.rawAvroEnabled() && RawAvroHeaders.present(sample)) {
+      return new RawAvroWriter(table, tableReference, config);
+    }
+
     return new IcebergWriter(table, tableReference, config);
   }
 
   @VisibleForTesting
   Table autoCreateTable(String tableName, SinkRecord sample) {
     StructType structType;
-    if (sample.valueSchema() == null) {
+    if (config.rawAvroEnabled() && RawAvroHeaders.present(sample)) {
+      // The Avro writer schema is a strictly better source than a Connect schema: it carries real
+      // nullability, decimal precision/scale and date/time logical types, all of which
+      // Connect-schema inference loses. Field ids assigned here are provisional --
+      // TableMetadata.newTableMetadata runs assignFreshIds on create -- so the annotator must read
+      // ids back from the created table.
+      structType = AvroSchemaUtil.toIceberg(RawAvroHeaders.parse(sample).writerSchema()).asStruct();
+    } else if (sample.valueSchema() == null) {
       Type type = SchemaUtils.inferIcebergType(sample.value(), config);
       if (type == null) {
         throw new DataException("Unable to create table from empty object");
